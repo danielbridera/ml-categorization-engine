@@ -1,31 +1,25 @@
 """
 Pipeline Configuration Registry
 
-Maps context names to pipeline configurations following CIE pattern.
-Allows easy addition of new contexts (e.g., "ESCALATION", "FEEDBACK").
+Unified prompt-driven classifier registry. All text classification tasks are
+configured through a single CLASSIFIERS dictionary in classifiers.py.
+
+To add a new classifier, simply add an entry to CLASSIFIERS in classifiers.py.
+No need to create separate config files or update multiple registries.
 """
 
-from typing import Any
+from categorization.pipelines.classifiers import (
+    CLASSIFIERS,
+    ClassifierConfig,
+    get_classifier_config,
+    get_classifier_info,
+    list_classifiers,
+)
 
-from categorization.pipelines.sentiment.constants import SENTIMENT_CTX
-from categorization.pipelines.sentiment.context import SENTIMENT_QUERIES_CONFIG
-from categorization.pipelines.sentiment.labeling import LABELING_CONFIG
-from categorization.pipelines.sentiment.preprocess import PREPROCESS_CONFIG
-from categorization.pipelines.sentiment.process_batches import PROCESS_BATCHES_CONFIG
-
-# Registry dictionaries - map context name to configuration
-QUERIES_BY_CONTEXT: dict[str, list[dict[str, Any]]] = {
-    SENTIMENT_CTX: SENTIMENT_QUERIES_CONFIG,
-}
-
-PREPROCESS_BY_CONTEXT: dict[str, list[dict[str, Any]]] = {
-    SENTIMENT_CTX: PREPROCESS_CONFIG,
-}
-
-LABELING_BY_CONTEXT: dict[str, list[dict[str, Any]]] = {
-    SENTIMENT_CTX: LABELING_CONFIG,
-}
-
-PROCESS_BATCHES_BY_CONTEXT: dict[str, list[dict[str, Any]]] = {
-    SENTIMENT_CTX: PROCESS_BATCHES_CONFIG,
-}
+__all__ = [
+    "CLASSIFIERS",
+    "ClassifierConfig",
+    "get_classifier_config",
+    "get_classifier_info",
+    "list_classifiers",
+]

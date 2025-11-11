@@ -1,3 +1,15 @@
+-- Generic Text Classification Query
+--
+-- This query extracts user messages from the mart_conversations table for any
+-- text classification task. It's context-agnostic and used by all classifiers
+-- (SENTIMENT, ESCALATION, FEEDBACK, etc.) unless a custom query is specified.
+--
+-- Parameters (provided by the pipeline):
+--   {start_date}  - Start date for conversation_started_at filter
+--   {end_date}    - End date for conversation_started_at filter
+--   {n_samples}   - Maximum number of messages to return
+--   {min_length}  - Minimum message length to include
+
 WITH user_messages AS (
   SELECT
     -- Conversation-level metadata

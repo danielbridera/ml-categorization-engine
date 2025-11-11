@@ -11,21 +11,24 @@ The Categorization Pipeline is a production-ready framework for batch classifica
 
 Built on the proven CIE (Conversational Insights Engine) architecture, this pipeline provides automatic experiment tracking, robust error handling, and an extensible design for multiple categorization tasks.
 
-### Current Support
+### Available Classifiers
 
-**✅ SENTIMENT** - Classify messages as positive, negative, neutral, or mixed
-**🔄 Future** - Architecture supports additional contexts (escalation detection, feedback classification, etc.)
+**SENTIMENT** - Classify messages as positive, negative, neutral, or mixed
+**ESCALATION** - Classify urgency level (urgent, high, medium, low)
+**FEEDBACK** - Classify feedback type (bug_report, feature_request, improvement, praise, question)
+
+**Adding new classifiers is trivial** - just add one configuration entry (~30 lines) to define your prompt!
 
 ### Key Features
 
-- **💰 50% Cost Savings**: Uses OpenAI Batch API instead of real-time API
-- **🔄 Automatic Experiment Tracking**: Each run creates timestamped experiment folders
-- **🎯 Auto-Discovery**: Automatically finds latest experiment - no config files needed
-- **⏱️ Async Processing**: Submit batch, wait 2-24 hours, then download results
-- **📊 BigQuery Integration**: Direct extraction from `mart_conversations`
-- **✨ Quality Control**: Deduplication, length filtering, validation, and retry logic
-- **🏗️ Extensible Architecture**: Registry pattern ready for multiple categorization contexts
-- **📈 Context-Aware**: Supports working with different categorization types via `--context_name`
+- **50% Cost Savings**: Uses OpenAI Batch API instead of real-time API
+- **Automatic Experiment Tracking**: Each run creates timestamped experiment folders
+- **Auto-Discovery**: Automatically finds latest experiment - no config files needed
+- **Async Processing**: Submit batch, wait 2-24 hours, then download results
+- **BigQuery Integration**: Direct extraction from `mart_conversations`
+- **Quality Control**: Deduplication, length filtering, validation, and retry logic
+- **Extensible Architecture**: Registry pattern ready for multiple categorization contexts
+- **Context-Aware**: Supports working with different categorization types via `--context_name`
 
 ## Requirements
 
@@ -87,26 +90,29 @@ categorization --help
 
 ## Quick Start
 
-Get started with sentiment analysis in 4 simple steps:
+Get started with any classifier in 4 simple steps. Here's an example using SENTIMENT:
 
 ```bash
 # Step 1: Extract 10 sample messages from BigQuery
 categorization make_context \
+  --context_name SENTIMENT \
   --start_date 2025-10-01 \
   --end_date 2025-10-31 \
   --n_samples 10
 
 # Step 2: Clean and deduplicate
-categorization make_preprocess
+categorization make_preprocess --context_name SENTIMENT
 
 # Step 3a: Submit to OpenAI Batch API
-categorization make_labeling
+categorization make_labeling --context_name SENTIMENT
 
 # [Wait 2-24 hours for batch processing]
 
 # Step 3b: Download results
-categorization make_process_batches
+categorization make_process_batches --context_name SENTIMENT
 ```
+
+**Want to try a different classifier?** Just change `SENTIMENT` to `ESCALATION` or `FEEDBACK` - same commands work for all classifiers!
 
 ## Pipeline Architecture
 
@@ -140,17 +146,30 @@ The pipeline follows a 4-step sequential workflow:
  ├─ Check batch status
  ├─ Download results when ready
  ├─ Parse sentiment labels
- └─ Output: sentiment_labeled.parquet ✨
+ └─ Output: sentiment_labeled.parquet
 ```
 
 ### Context-Based Design
 
-The pipeline uses a **context** system for different categorization tasks:
+The pipeline uses a **context** system for different categorization tasks. Simply change `--context_name` to run any classifier:
 
-- **SENTIMENT** (current): Classify message sentiment
-- **Future contexts**: ESCALATION, FEEDBACK, INTENT, etc.
+- **SENTIMENT**: Classify message sentiment (positive, negative, neutral, mixed)
+- **ESCALATION**: Classify urgency level (urgent, high, medium, low)
+- **FEEDBACK**: Classify feedback type (bug_report, feature_request, improvement, praise, question)
 
-All commands accept `--context_name SENTIMENT` (default) to specify which categorization task to run.
+**Same commands, different contexts:**
+```bash
+# Run SENTIMENT classifier
+categorization make_context --context_name SENTIMENT --start_date 2025-10-01 --end_date 2025-10-31
+
+# Run ESCALATION classifier (exact same command pattern!)
+categorization make_context --context_name ESCALATION --start_date 2025-10-01 --end_date 2025-10-31
+
+# Run FEEDBACK classifier
+categorization make_context --context_name FEEDBACK --start_date 2025-10-01 --end_date 2025-10-31
+```
+
+All commands accept `--context_name` (defaults to SENTIMENT if not specified).
 
 ## CLI Commands Reference
 
@@ -178,13 +197,13 @@ categorization make_context \
 
 **Output:**
 ```
-🔄 Extracting messages from BigQuery...
+Extracting messages from BigQuery...
    Context: SENTIMENT
    Date range: 2025-10-01 to 2025-10-31
    Samples: 1,000, Min length: 6
 
-✅ Context creation completed!
-📁 Experiment ID: sentiment_20251105_143022
+Context creation completed!
+Experiment ID: sentiment_20251105_143022
 
 Next step: categorization make_preprocess --context_name SENTIMENT
 ```
@@ -219,10 +238,10 @@ categorization make_preprocess --experiment_id sentiment_20251105_143022
 
 **Output:**
 ```
-🔄 Preprocessing latest experiment (SENTIMENT)...
+Preprocessing latest experiment (SENTIMENT)...
 
-✅ Preprocessing completed!
-📁 Experiment ID: sentiment_20251105_143022
+Preprocessing completed!
+Experiment ID: sentiment_20251105_143022
 
 Next step: categorization make_labeling --context_name SENTIMENT
 ```
@@ -265,14 +284,14 @@ categorization make_labeling \
 
 **Output:**
 ```
-🔄 Submitting batch for latest experiment (SENTIMENT)...
+Submitting batch for latest experiment (SENTIMENT)...
 
-✅ Batch submitted successfully!
-📁 Experiment ID: sentiment_20251105_143022
-🆔 Batch ID: batch_690b866d825c819093a737fb417c529d
+Batch submitted successfully!
+Experiment ID: sentiment_20251105_143022
+Batch ID: batch_690b866d825c819093a737fb417c529d
 
-⏳ Batch processing will complete in 2-24 hours
-💡 Check status: categorization make_process_batches --context_name SENTIMENT
+Batch processing will complete in 2-24 hours
+Check status: categorization make_process_batches --context_name SENTIMENT
 ```
 
 **Creates:**
@@ -309,32 +328,31 @@ categorization make_process_batches --experiment_id sentiment_20251105_143022
 
 **Output (in progress):**
 ```
-🔄 Processing batch for latest experiment (SENTIMENT)...
+Processing batch for latest experiment (SENTIMENT)...
 
-⏳ Batch still processing...
-💡 Try again later: categorization make_process_batches --context_name SENTIMENT
+Batch still processing...
+Try again later: categorization make_process_batches --context_name SENTIMENT
 ```
 
 **Output (completed):**
 ```
-🔄 Processing batch for latest experiment (SENTIMENT)...
+Processing batch for latest experiment (SENTIMENT)...
 
-✅ Batch processing completed!
-📁 Experiment ID: sentiment_20251105_143022
+Batch processing completed!
+Experiment ID: sentiment_20251105_143022
 
 Labeled data ready! Check: experiments/sentiment_20251105_143022/sentiment_labeled.parquet
 ```
 
 **Creates:**
-- `experiments/sentiment_20251105_143022/batch_results.jsonl`
-- `experiments/sentiment_20251105_143022/sentiment_labeled.parquet` ✨ **FINAL OUTPUT**
+- `experiments/{context}_20251105_143022/batch_results.jsonl`
+- `experiments/{context}_20251105_143022/{context}_labeled.parquet` **FINAL OUTPUT**
 
-**Sentiment Categories:**
-- `positive` - Satisfaction, gratitude, happiness
-- `negative` - Frustration, anger, disappointment
-- `neutral` - Factual, informational
-- `mixed` - Contains both positive and negative sentiment
-- `error` - Failed to categorize
+**Output Categories (vary by classifier):**
+- SENTIMENT: `positive`, `negative`, `neutral`, `mixed`
+- ESCALATION: `urgent`, `high`, `medium`, `low`
+- FEEDBACK: `bug_report`, `feature_request`, `improvement`, `praise`, `question`
+- All classifiers may also return `error` for failed classifications
 
 ---
 
@@ -370,10 +388,10 @@ Parameters:
   min_length: 6
 
 Steps Completed:
-  ✅ context
-  ✅ preprocess
-  ✅ labeling
-  ✅ process_batches
+  - context
+  - preprocess
+  - labeling
+  - process_batches
 
 Batch Status: completed
   Completed: 950/950
@@ -408,17 +426,17 @@ categorization list --context_name SENTIMENT
 All Experiments - SENTIMENT (3 total)
 ================================================================================
 
-📁 sentiment_20251105_143022
+sentiment_20251105_143022
    Created: 2025-11-05T14:15:25.284427
    Progress: 4/4 steps
-   Status: ✅ context → ✅ preprocess → ✅ labeling → ✅ process_batches
+   Status: [DONE] context -> [DONE] preprocess -> [DONE] labeling -> [DONE] process_batches
    Batch: completed
    Parameters: 2025-10-01 to 2025-10-31, 1,000 samples
 
-📁 sentiment_20251104_091530
+sentiment_20251104_091530
    Created: 2025-11-04T09:15:30.123456
    Progress: 3/4 steps
-   Status: ✅ context → ✅ preprocess → ✅ labeling → ⏸️ process_batches
+   Status: [DONE] context -> [DONE] preprocess -> [DONE] labeling -> [PENDING] process_batches
    Batch: in_progress
    Parameters: 2025-09-01 to 2025-09-30, 500 samples
 
@@ -458,8 +476,8 @@ categorization make_context \
 ```
 **Output:**
 ```
-✅ Context creation completed!
-📁 Experiment ID: sentiment_20251105_090015
+Context creation completed!
+Experiment ID: sentiment_20251105_090015
 ```
 
 ```bash
@@ -470,7 +488,7 @@ categorization make_preprocess --context_name SENTIMENT
 ```
 Removed 25 duplicates (2.5%)
 Removed 25 null/empty messages
-✅ Preprocessing completed! 950 messages ready
+Preprocessing completed! 950 messages ready
 ```
 
 ```bash
@@ -479,9 +497,9 @@ categorization make_labeling --context_name SENTIMENT
 ```
 **Output:**
 ```
-✅ Batch submitted successfully!
-🆔 Batch ID: batch_abc123xyz789
-⏳ Batch processing will complete in 2-24 hours
+Batch submitted successfully!
+Batch ID: batch_abc123xyz789
+Batch processing will complete in 2-24 hours
 ```
 
 ---
@@ -494,9 +512,9 @@ categorization make_process_batches --context_name SENTIMENT
 ```
 **Output:**
 ```
-⏳ Batch still processing...
+Batch still processing...
 Progress: 45% (430/950 completed)
-💡 Try again later
+Try again later
 ```
 
 ---
@@ -509,7 +527,7 @@ categorization make_process_batches --context_name SENTIMENT
 ```
 **Output:**
 ```
-✅ Batch processing completed!
+Batch processing completed!
 Cost: $0.0095
 
 Label Distribution:
@@ -529,9 +547,9 @@ categorization status --context_name SENTIMENT
 **Output:**
 ```
 Experiment: sentiment_20251105_090015
-Steps Completed: ✅ context → ✅ preprocess → ✅ labeling → ✅ process_batches
+Steps Completed: [DONE] context -> [DONE] preprocess -> [DONE] labeling -> [DONE] process_batches
 Batch Status: completed
-Statistics: 1000 extracted → 950 preprocessed → 942 labeled
+Statistics: 1000 extracted -> 950 preprocessed -> 942 labeled
 ```
 
 ---
@@ -540,8 +558,9 @@ Statistics: 1000 extracted → 950 preprocessed → 942 labeled
 
 ### Experiment Directory
 
-Each experiment creates a timestamped folder with all artifacts:
+Each experiment creates a timestamped folder with all artifacts. The file names are automatically generated based on the classifier context:
 
+**Example: SENTIMENT classifier**
 ```
 experiments/
 └── sentiment_20251105_090015/
@@ -551,12 +570,29 @@ experiments/
     ├── sentiment_preprocessed.parquet  # Step 2: Cleaned messages
     ├── batch_requests.jsonl            # Step 3a: Batch API requests
     ├── batch_results.jsonl             # Step 3b: Raw API responses
-    └── sentiment_labeled.parquet       # Step 3b: FINAL LABELED DATA ✨
+    └── sentiment_labeled.parquet       # Step 3b: FINAL LABELED DATA
 ```
+
+**Example: ESCALATION classifier**
+```
+experiments/
+└── escalation_20251106_120030/
+    ├── metadata.json
+    ├── batch_info.json
+    ├── escalation_context.parquet
+    ├── escalation_preprocessed.parquet
+    ├── batch_requests.jsonl
+    ├── batch_results.jsonl
+    └── escalation_labeled.parquet      # FINAL OUTPUT
+```
+
+**Pattern:** `experiments/{context_name}_{timestamp}/{context_name}_*.parquet`
 
 ### Final Output Schema
 
-`sentiment_labeled.parquet` contains:
+The final labeled parquet file (`{context}_labeled.parquet`) contains all original columns plus your classifier's output column:
+
+**Common columns (all classifiers):**
 
 | Column | Type | Description | Example |
 |--------|------|-------------|---------|
@@ -566,7 +602,35 @@ experiments/
 | `message_text` | string | User message content | "Thank you for your help!" |
 | `event_timestamp` | timestamp | When message was sent | 2025-10-15 14:30:22 |
 | `step_name` | string | Conversation step | "initial_contact" |
-| `sentiment` | string | **Labeled sentiment** | "positive" |
+
+**Classifier-specific column (configured in `output_column`):**
+
+| Classifier | Output Column | Example Values |
+|------------|---------------|----------------|
+| SENTIMENT | `sentiment` | positive, negative, neutral, mixed |
+| ESCALATION | `urgency_level` | urgent, high, medium, low |
+| FEEDBACK | `feedback_type` | bug_report, feature_request, improvement, praise, question |
+
+**Example: SENTIMENT labeled output**
+```python
+>>> import pandas as pd
+>>> df = pd.read_parquet("experiments/sentiment_20251105_090015/sentiment_labeled.parquet")
+>>> df[['message_text', 'sentiment']].head(3)
+                    message_text  sentiment
+0  Thank you for your help!      positive
+1  This is not working          negative
+2  What are your hours?         neutral
+```
+
+**Example: ESCALATION labeled output**
+```python
+>>> df = pd.read_parquet("experiments/escalation_20251106_120030/escalation_labeled.parquet")
+>>> df[['message_text', 'urgency_level']].head(3)
+                    message_text  urgency_level
+0  My account is locked!         urgent
+1  Can you help with this?       medium
+2  Just checking in              low
+```
 
 ### Metadata Structure
 
@@ -599,34 +663,130 @@ experiments/
 
 ---
 
-## Extensibility
+## Adding a New Classifier
 
-### Adding New Categorization Contexts
+The pipeline uses a **prompt-driven architecture** - adding a new classifier is incredibly simple!
 
-The pipeline is designed to support multiple categorization tasks beyond SENTIMENT:
+### How Simple Is It?
 
-**Planned Contexts:**
-- `ESCALATION` - Detect if message requires human escalation
-- `FEEDBACK` - Classify as feature request, bug report, or praise
-- `INTENT` - Determine user's primary intent
-- `URGENCY` - Classify message urgency level
+**Old approach:** ~150 lines across 8 files (constants, SQL queries, configs, registries)
+**New approach:** ~30 lines in 1 file (just the prompt configuration!)
 
-**Current Status:**
-✅ Architecture supports multiple contexts via registry pattern
-⚠️ Only SENTIMENT is currently implemented
+**80% reduction in boilerplate code**
 
-**To add a new context:**
-1. Create context constants in `src/categorization/pipelines/your_context/constants.py`
-2. Define SQL query in `src/categorization/sql/context/your_context/`
-3. Configure prompts in `src/categorization/pipelines/your_context/labeling.py`
-4. Register in `src/categorization/pipelines/__init__.py`
+### Step-by-Step Guide
 
-Example future usage:
-```bash
-# Escalation detection (future)
-categorization make_context --context_name ESCALATION --n_samples 500
-categorization make_labeling --context_name ESCALATION
+#### 1. Edit the Classifier Registry
+
+Open [`src/categorization/pipelines/classifiers.py`](src/categorization/pipelines/classifiers.py) and add your classifier to the `CLASSIFIERS` dictionary:
+
+```python
+CLASSIFIERS = {
+    # ... existing classifiers (SENTIMENT, ESCALATION, FEEDBACK) ...
+
+    "YOUR_CLASSIFIER": {
+        "context_name": "YOUR_CLASSIFIER",
+        "system_prompt": "You are an expert at classifying messages. Respond ONLY with the category name.",
+        "user_prompt_template": """Classify the following message into one of these categories:
+
+- category1: Description of category 1
+- category2: Description of category 2
+- category3: Description of category 3
+
+Respond with ONLY the category name (category1, category2, or category3), nothing else.
+
+User message: {message}""",
+        "output_column": "your_label_column",
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "max_tokens": 20,
+        "use_generic_query": True,
+    },
+}
 ```
+
+#### 2. That's It!
+
+No other files to create or modify. The system automatically:
+- Generates file names (`your_classifier_context.parquet`, `your_classifier_preprocessed.parquet`, etc.)
+- Uses the generic SQL query for data extraction
+- Handles all preprocessing and batch submission
+- Creates labeled output with your specified column name
+
+#### 3. Run Your Classifier
+
+```bash
+# Extract messages
+categorization make_context --context_name YOUR_CLASSIFIER \
+  --start_date 2025-10-01 --end_date 2025-10-31 --n_samples 1000
+
+# Preprocess
+categorization make_preprocess --context_name YOUR_CLASSIFIER
+
+# Submit to OpenAI
+categorization make_labeling --context_name YOUR_CLASSIFIER
+
+# Download results (after 2-24 hours)
+categorization make_process_batches --context_name YOUR_CLASSIFIER
+```
+
+### Real Examples
+
+The pipeline includes 3 production-ready classifiers:
+
+**SENTIMENT Classifier:**
+```python
+"SENTIMENT": {
+    "output_column": "sentiment",
+    "system_prompt": "You are a sentiment analysis expert...",
+    "user_prompt_template": "Analyze sentiment: positive, negative, neutral, or mixed...",
+}
+```
+- Output: `sentiment_labeled.parquet` with `sentiment` column
+- Categories: positive, negative, neutral, mixed
+
+**ESCALATION Classifier:**
+```python
+"ESCALATION": {
+    "output_column": "urgency_level",
+    "system_prompt": "You are an urgency classification expert...",
+    "user_prompt_template": "Classify urgency: urgent, high, medium, or low...",
+}
+```
+- Output: `escalation_labeled.parquet` with `urgency_level` column
+- Categories: urgent, high, medium, low
+
+**FEEDBACK Classifier:**
+```python
+"FEEDBACK": {
+    "output_column": "feedback_type",
+    "system_prompt": "You are a feedback classification expert...",
+    "user_prompt_template": "Classify feedback type: bug_report, feature_request, etc...",
+}
+```
+- Output: `feedback_labeled.parquet` with `feedback_type` column
+- Categories: bug_report, feature_request, improvement, praise, question
+
+### Configuration Options
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `context_name` | Yes | Uppercase identifier for your classifier | `"SENTIMENT"` |
+| `system_prompt` | Yes | System instruction for the LLM | `"You are an expert..."` |
+| `user_prompt_template` | Yes | Prompt template with `{message}` placeholder | `"Classify: {message}"` |
+| `output_column` | Yes | Column name for labels in output parquet | `"sentiment"` |
+| `model` | No | OpenAI model (default: `"gpt-4o-mini"`) | `"gpt-4o"` |
+| `temperature` | No | Sampling temperature (default: `0`) | `0` |
+| `max_tokens` | No | Max tokens in response (default: `10`) | `20` |
+| `use_generic_query` | No | Use generic SQL query (default: `True`) | `True` |
+
+### Prompt Engineering Tips
+
+1. **Be specific about categories**: List all possible categories with descriptions
+2. **Request exact format**: "Respond with ONLY the category name, nothing else"
+3. **Use low temperature**: Set `temperature: 0` for consistent classification
+4. **Limit max_tokens**: Short responses are faster and cheaper
+5. **Test your prompt**: Try a few examples manually before running full batch
 
 ---
 
@@ -728,6 +888,8 @@ model.fit(X, y)
 ```
 
 ### 3. Analyze Label Distribution
+
+**For SENTIMENT classifier:**
 ```python
 import pandas as pd
 
@@ -742,6 +904,30 @@ print(df.groupby('workflow_name')['sentiment'].value_counts(normalize=True))
 # By time period
 df['month'] = pd.to_datetime(df['event_timestamp']).dt.month
 print(df.groupby('month')['sentiment'].value_counts(normalize=True))
+```
+
+**For ESCALATION classifier:**
+```python
+df = pd.read_parquet("experiments/escalation_20251106_120030/escalation_labeled.parquet")
+
+# Urgency distribution
+print(df['urgency_level'].value_counts(normalize=True))
+
+# Urgent messages by workflow
+urgent = df[df['urgency_level'] == 'urgent']
+print(urgent['workflow_name'].value_counts())
+```
+
+**For FEEDBACK classifier:**
+```python
+df = pd.read_parquet("experiments/feedback_20251107_150045/feedback_labeled.parquet")
+
+# Feedback type distribution
+print(df['feedback_type'].value_counts(normalize=True))
+
+# Bug reports vs feature requests
+bugs_vs_features = df[df['feedback_type'].isin(['bug_report', 'feature_request'])]
+print(bugs_vs_features['feedback_type'].value_counts())
 ```
 
 ### 4. Quality Assurance
@@ -782,17 +968,32 @@ print(errors[['message_text']].head())
 
 ### File Naming Conventions
 
-Files are prefixed with context name for multi-context support:
+Files are automatically prefixed with the lowercase context name. This pattern enables running multiple classifiers in parallel without file conflicts:
 
+**SENTIMENT classifier:**
 ```
-sentiment_context.parquet       # SENTIMENT context extraction
-sentiment_preprocessed.parquet  # SENTIMENT preprocessing
-sentiment_labeled.parquet       # SENTIMENT final output
+sentiment_context.parquet       # Step 1: Extracted messages
+sentiment_preprocessed.parquet  # Step 2: Cleaned messages
+sentiment_labeled.parquet       # Step 3b: Final output with 'sentiment' column
+```
 
-# Future:
-escalation_context.parquet     # ESCALATION context extraction
-escalation_labeled.parquet     # ESCALATION final output
+**ESCALATION classifier:**
 ```
+escalation_context.parquet      # Step 1: Extracted messages
+escalation_preprocessed.parquet # Step 2: Cleaned messages
+escalation_labeled.parquet      # Step 3b: Final output with 'urgency_level' column
+```
+
+**FEEDBACK classifier:**
+```
+feedback_context.parquet        # Step 1: Extracted messages
+feedback_preprocessed.parquet   # Step 2: Cleaned messages
+feedback_labeled.parquet        # Step 3b: Final output with 'feedback_type' column
+```
+
+**Pattern:** `{context_name.lower()}_{step}.parquet`
+
+The system auto-generates these filenames from your context name - no manual configuration needed!
 
 ### Environment Variables
 
@@ -804,17 +1005,44 @@ escalation_labeled.parquet     # ESCALATION final output
 
 ---
 
-## Version History
+## Version History & Roadmap
 
-**Supported Contexts:**
+### Current Release (v1.0.0)
+
+**Architecture:**
+- Prompt-driven classifier system (80% reduction in boilerplate)
+- Unified CLASSIFIERS registry in single file
+- Auto-generated file names and step names
+- Generic SQL query for all classifiers
+- Context-based experiment isolation
+
+**Supported Classifiers:**
 - SENTIMENT (positive, negative, neutral, mixed)
+- ESCALATION (urgent, high, medium, low)
+- FEEDBACK (bug_report, feature_request, improvement, praise, question)
 
-**Future Roadmap:**
-- ESCALATION context
-- FEEDBACK context
-- INTENT context
-- BigQuery upload step
-- Parallel batch processing
+**Features:**
+- BigQuery data extraction
+- OpenAI Batch API integration (50% cost savings)
+- Automatic experiment tracking
+- Robust error handling and retries
+- Metadata-driven state management
+- CLI with 9 commands
+
+### Future Roadmap
+
+**Planned Features:**
+- BigQuery upload step (write labeled data back to BQ)
+- Parallel batch processing (run multiple classifiers simultaneously)
+- Custom SQL query support (override generic query per classifier)
+- Batch status monitoring dashboard
+- Cost tracking and optimization tools
+
+**Potential New Classifiers:**
+- INTENT (determine user's primary intent)
+- LANGUAGE (detect message language)
+- TOPIC (classify message topic/category)
+- TONE (detect communication tone)
 
 ---
 
@@ -825,4 +1053,4 @@ Internal use only. Not for external distribution.
 
 ---
 
-**Built with ❤️ using the CIE architecture pattern**
+**Built using the CIE architecture pattern**

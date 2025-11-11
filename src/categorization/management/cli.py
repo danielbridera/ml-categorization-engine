@@ -14,6 +14,7 @@ from categorization.management.make_context import make_context
 from categorization.management.make_labeling import make_labeling
 from categorization.management.make_preprocess import make_preprocess
 from categorization.management.make_process_batches import make_process_batches
+from categorization.pipelines.classifiers import list_classifiers
 from categorization.settings.log import setup_pipeline_logging
 from categorization.utils.metadata import ExperimentMetadata
 
@@ -66,7 +67,7 @@ def main():
 @click.option(
     "--context_name",
     default="SENTIMENT",
-    help="Context name for categorization (default: SENTIMENT)",
+    help=f"Classifier context name (available: {', '.join(list_classifiers())})",
 )
 @handle_cli_errors
 def make_context_cmd(
@@ -136,7 +137,7 @@ def make_preprocess_cmd(experiment_id: str | None, context_name: str | None):
 @click.option(
     "--context_name",
     default="SENTIMENT",
-    help="Context name for categorization (default: SENTIMENT)",
+    help=f"Classifier context name (available: {', '.join(list_classifiers())})",
 )
 @handle_cli_errors
 def make_labeling_cmd(experiment_id: str | None, model: str, context_name: str):
@@ -168,7 +169,7 @@ def make_labeling_cmd(experiment_id: str | None, model: str, context_name: str):
 @click.option(
     "--context_name",
     default="SENTIMENT",
-    help="Context name for categorization (default: SENTIMENT)",
+    help=f"Classifier context name (available: {', '.join(list_classifiers())})",
 )
 @handle_cli_errors
 def make_process_batches_cmd(experiment_id: str | None, context_name: str):
@@ -278,7 +279,9 @@ def list_cmd(context_name: str | None):
 @main.command(name="version")
 def version_cmd():
     """Show version information"""
-    click.echo(f"Sentiment Analysis Pipeline v{__version__}")
+    classifiers = ", ".join(list_classifiers())
+    click.echo(f"Categorization Pipeline v{__version__}")
+    click.echo(f"Available classifiers: {classifiers}")
 
 
 if __name__ == "__main__":
