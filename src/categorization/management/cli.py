@@ -69,15 +69,27 @@ def main():
     default="SENTIMENT",
     help=f"Classifier context name (available: {', '.join(list_classifiers())})",
 )
+@click.option(
+    "--workflow_name",
+    default=None,
+    help="Optional workflow name filter (e.g. 'my_bot'). Speeds up conversation-mode queries.",
+)
 @handle_cli_errors
 def make_context_cmd(
-    start_date: str, end_date: str, n_samples: int, min_length: int, context_name: str
+    start_date: str,
+    end_date: str,
+    n_samples: int,
+    min_length: int,
+    context_name: str,
+    workflow_name: str | None,
 ):
     """STEP 1: Extract messages from BigQuery"""
     click.echo("🔄 Extracting messages from BigQuery...")
     click.echo(f"   Context: {context_name}")
     click.echo(f"   Date range: {start_date} to {end_date}")
     click.echo(f"   Samples: {n_samples:,}, Min length: {min_length}")
+    if workflow_name:
+        click.echo(f"   Workflow filter: {workflow_name}")
 
     experiment_id = make_context(
         start_date=start_date,
@@ -85,6 +97,7 @@ def make_context_cmd(
         n_samples=n_samples,
         min_length=min_length,
         context_name=context_name,
+        workflow_name=workflow_name,
     )
 
     click.secho("\n✅ Context creation completed!", fg="green")

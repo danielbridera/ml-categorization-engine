@@ -50,26 +50,39 @@ def make_labeling(
 
     # Get configuration from unified registry
     classifier_config = get_classifier_config(context_name)
+    unit = classifier_config.get("unit", "message")
     files = get_classifier_files(context_name)
     step_names = get_classifier_step_names(context_name)
 
-    logger.info(f"Processing: {step_names['labeling']}")
+    logger.info(f"Processing: {step_names['labeling']} (unit={unit})")
 
     # Use provided model or config default
-    model_to_use = model if model is not None else classifier_config.get("model", "gpt-4o-mini")
+    model_to_use = (
+        model if model is not None else classifier_config.get("model", "gpt-4o-mini")
+    )
+
+    # Branch on unit: conversations use conversation_text, messages use message_text
+    if unit == "conversation":
+        text_column = "conversation_text"
+        required_cols = ["conversation_text"]
+        item_label = "conversations"
+    else:
+        text_column = "message_text"
+        required_cols = ["message_text"]
+        item_label = "messages"
 
     # Load preprocessed data
     input_file = metadata.experiment_dir / files["preprocessed_output"]
     df = load_parquet_with_validation(
         file_path=input_file,
         step_name="labeling",
-        required_columns=["message_text"],
+        required_columns=required_cols,
     )
 
-    messages = df["message_text"].tolist()
+    messages = df[text_column].tolist()
     total_messages = len(messages)
 
-    logger.info(f"Preparing {total_messages:,} messages for batch labeling")
+    logger.info(f"Preparing {total_messages:,} {item_label} for batch labeling")
 
     # Initialize OpenAI Batch client
     batch_client = OpenAIBatchClient()
@@ -88,7 +101,9 @@ def make_labeling(
 
     # Submit batch
     logger.info("Submitting batch to OpenAI")
-    task_desc = classifier_config.get("task_description", f"{context_name.lower()}_classification")
+    task_desc = classifier_config.get(
+        "task_description", f"{context_name.lower()}_classification"
+    )
     batch_info = batch_client.submit_batch(
         file_path=batch_file_path,
         task_description=task_desc,

@@ -56,10 +56,19 @@ def make_process_batches(
 
     # Get configuration from unified registry
     classifier_config = get_classifier_config(context_name)
+    unit = classifier_config.get("unit", "message")
     files = get_classifier_files(context_name)
     step_names = get_classifier_step_names(context_name)
 
-    logger.info(f"Processing: {step_names['process_batches']}")
+    # Branch on unit for required columns and label descriptions
+    if unit == "conversation":
+        required_cols = ["conversation_text"]
+        item_label = "conversations"
+    else:
+        required_cols = ["message_id", "message_text"]
+        item_label = "messages"
+
+    logger.info(f"Processing: {step_names['process_batches']} (unit={unit})")
 
     # Initialize OpenAI Batch client
     batch_client = OpenAIBatchClient()
@@ -118,7 +127,7 @@ def make_process_batches(
         df = load_parquet_with_validation(
             file_path=input_file,
             step_name="process_batches",
-            required_columns=["message_id", "message_text"],
+            required_columns=required_cols,
         )
 
         # Add label column (configurable column name)
@@ -126,7 +135,7 @@ def make_process_batches(
 
         # Save labeled data
         output_file = metadata.experiment_dir / files["labeled_output"]
-        save_parquet(df, output_file, description="labeled messages")
+        save_parquet(df, output_file, description=f"labeled {item_label}")
 
         # Update metadata with results
         labeled_count = len([label for label in labels if label != "error"])
@@ -143,7 +152,8 @@ def make_process_batches(
         )
 
         metadata.update_step(
-            step_name="process_batches", stats={"messages_labeled": labeled_count}
+            step_name="process_batches",
+            stats={f"{item_label}_labeled": labeled_count},
         )
         metadata.update_file("labeled")
 
@@ -151,7 +161,7 @@ def make_process_batches(
 
         logger.success(
             "Batch processing complete",
-            details=f"Labeled: {labeled_count:,} messages, Cost: ${stats['total_cost']:.4f}",
+            details=f"Labeled: {labeled_count:,} {item_label}, Cost: ${stats['total_cost']:.4f}",
         )
 
         # Show label distribution
@@ -164,13 +174,11 @@ def make_process_batches(
                 pct = (count / len(df_clean) * 100) if len(df_clean) > 0 else 0
                 logger.info(f"  {label}: {count:,} ({pct:.1f}%)")
         else:
-            logger.warning(
-                "All labels returned errors - no successful categorizations"
-            )
+            logger.warning("All labels returned errors - no successful categorizations")
 
         logger.success(
             f"Processed batch results: {step_names['process_batches']}",
-            details=f"Labeled: {labeled_count:,} messages",
+            details=f"Labeled: {labeled_count:,} {item_label}",
         )
 
         return experiment_id, "completed"

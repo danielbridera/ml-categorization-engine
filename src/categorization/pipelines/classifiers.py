@@ -29,6 +29,7 @@ class ClassifierConfig(TypedDict, total=False):
         sql_query_path: Custom SQL query path if use_generic_query is False
         task_description: Optional description for OpenAI metadata
     """
+
     # Required
     context_name: str
     system_prompt: str
@@ -42,6 +43,8 @@ class ClassifierConfig(TypedDict, total=False):
     use_generic_query: bool
     sql_query_path: str
     task_description: str
+    unit: str  # "message" (default) or "conversation"
+    conversation_timeout: str  # e.g. "30m" — only used when unit="conversation"
 
 
 # ============================================================================
@@ -75,7 +78,6 @@ User message: {message}""",
         "max_tokens": 10,
         "use_generic_query": True,
     },
-
     # ------------------------------------------------------------------------
     # Escalation Priority Classification
     # ------------------------------------------------------------------------
@@ -100,7 +102,89 @@ User message: {message}""",
         "max_tokens": 10,
         "use_generic_query": True,
     },
+    # ------------------------------------------------------------------------
+    # Conversation Resolution Classification
+    # ------------------------------------------------------------------------
+    "CONVERSATION_RESOLUTION": {
+        "context_name": "CONVERSATION_RESOLUTION",
+        "unit": "conversation",
+        "conversation_timeout": "30m",
+        "system_prompt": (
+            "You are a customer support quality analyst. "
+            "Respond only with the resolution category."
+        ),
+        "user_prompt_template": """Classify whether this conversation was resolved:
+- resolved: User's issue was fully addressed and they acknowledged it
+- partially_resolved: Issue was addressed but user had remaining questions
+- unresolved: Issue was not addressed or user left without resolution
+- unclear: Not enough context to determine resolution
 
+Respond with ONLY the category name (resolved, partially_resolved, unresolved, or unclear), nothing else.
+
+Conversation:
+{message}""",
+        "output_column": "resolution_status",
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "max_tokens": 20,
+        "use_generic_query": True,
+    },
+    # ------------------------------------------------------------------------
+    # Conversation Satisfaction Classification
+    # ------------------------------------------------------------------------
+    "CONVERSATION_SATISFACTION": {
+        "context_name": "CONVERSATION_SATISFACTION",
+        "unit": "conversation",
+        "conversation_timeout": "30m",
+        "system_prompt": (
+            "You are a customer experience analyst. "
+            "Respond only with the satisfaction category."
+        ),
+        "user_prompt_template": """Assess customer satisfaction in this conversation:
+- satisfied: Customer expressed satisfaction or issue was resolved smoothly
+- neutral: Interaction was transactional with no clear satisfaction signals
+- dissatisfied: Customer expressed frustration or left unresolved
+- escalated: Customer requested human agent or expressed anger
+
+Respond with ONLY the category name (satisfied, neutral, dissatisfied, or escalated), nothing else.
+
+Conversation:
+{message}""",
+        "output_column": "satisfaction_level",
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "max_tokens": 20,
+        "use_generic_query": True,
+    },
+    # ------------------------------------------------------------------------
+    # Conversation Intent Classification
+    # ------------------------------------------------------------------------
+    "CONVERSATION_INTENT": {
+        "context_name": "CONVERSATION_INTENT",
+        "unit": "conversation",
+        "conversation_timeout": "30m",
+        "system_prompt": (
+            "You are a customer intent classifier. "
+            "Respond only with the intent category."
+        ),
+        "user_prompt_template": """Classify the primary intent of this customer conversation:
+- technical_support: Reporting bugs, errors, or technical issues
+- billing_and_payments: Questions about charges, invoices, or subscriptions
+- account_management: Login, password, or account settings
+- product_information: Questions about features or how something works
+- complaint: Expressing dissatisfaction without a specific request
+- general_inquiry: Other questions not fitting the above categories
+
+Respond with ONLY the category name, nothing else.
+
+Conversation:
+{message}""",
+        "output_column": "conversation_intent",
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "max_tokens": 25,
+        "use_generic_query": True,
+    },
     # ------------------------------------------------------------------------
     # Feedback Type Classification
     # ------------------------------------------------------------------------
@@ -130,6 +214,7 @@ User message: {message}""",
 # HELPER FUNCTIONS
 # ============================================================================
 
+
 def get_classifier_config(context_name: str) -> ClassifierConfig:
     """
     Get configuration for a classifier by context name.
@@ -146,8 +231,7 @@ def get_classifier_config(context_name: str) -> ClassifierConfig:
     if context_name not in CLASSIFIERS:
         available = ", ".join(sorted(CLASSIFIERS.keys()))
         raise ValueError(
-            f"Unknown context: {context_name}. "
-            f"Available contexts: {available}"
+            f"Unknown context: {context_name}. Available contexts: {available}"
         )
     return CLASSIFIERS[context_name]
 
@@ -180,4 +264,6 @@ def get_classifier_info(context_name: str) -> dict[str, Any]:
         "temperature": config.get("temperature", 0),
         "max_tokens": config.get("max_tokens", 10),
         "uses_generic_query": config.get("use_generic_query", True),
+        "unit": config.get("unit", "message"),
+        "conversation_timeout": config.get("conversation_timeout", "30m"),
     }

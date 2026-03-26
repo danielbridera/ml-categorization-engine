@@ -36,6 +36,9 @@ class ExperimentMetadata:
         n_samples: int,
         min_length: int,
         context_name: str,
+        unit: str = "message",
+        conversation_timeout: str = "30m",
+        workflow_name: str | None = None,
         base_dir: str = "experiments",
     ) -> "ExperimentMetadata":
         """
@@ -47,6 +50,8 @@ class ExperimentMetadata:
             n_samples: Number of samples to extract
             min_length: Minimum message length
             context_name: Context name for experiment ID prefix
+            unit: Classification unit — "message" (default) or "conversation"
+            conversation_timeout: Inactivity timeout for conversation grouping (e.g. "30m")
             base_dir: Base directory for experiments
 
         Returns:
@@ -70,6 +75,9 @@ class ExperimentMetadata:
                 "end_date": end_date,
                 "n_samples": n_samples,
                 "min_length": min_length,
+                "unit": unit,
+                "conversation_timeout": conversation_timeout,
+                "workflow_name": workflow_name,
             },
             "steps_completed": [],
             "batch_info": None,

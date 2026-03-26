@@ -13,9 +13,15 @@ Built on the proven CIE (Conversational Insights Engine) architecture, this pipe
 
 ### Available Classifiers
 
-**SENTIMENT** - Classify messages as positive, negative, neutral, or mixed
-**ESCALATION** - Classify urgency level (urgent, high, medium, low)
-**FEEDBACK** - Classify feedback type (bug_report, feature_request, improvement, praise, question)
+**Message-level classifiers** (classify individual user messages):
+- **SENTIMENT** - positive, negative, neutral, mixed
+- **ESCALATION** - urgent, high, medium, low
+- **FEEDBACK** - bug_report, feature_request, improvement, praise, question
+
+**Conversation-level classifiers** (classify entire user+agent conversations):
+- **CONVERSATION_RESOLUTION** - resolved, partially_resolved, unresolved, unclear
+- **CONVERSATION_SATISFACTION** - satisfied, neutral, dissatisfied, escalated
+- **CONVERSATION_INTENT** - technical_support, billing_and_payments, account_management, product_information, complaint, general_inquiry
 
 **Adding new classifiers is trivial** - just add one configuration entry (~30 lines) to define your prompt!
 
@@ -29,6 +35,7 @@ Built on the proven CIE (Conversational Insights Engine) architecture, this pipe
 - **Quality Control**: Deduplication, length filtering, validation, and retry logic
 - **Extensible Architecture**: Registry pattern ready for multiple categorization contexts
 - **Context-Aware**: Supports working with different categorization types via `--context_name`
+- **Conversation-Level Tagging**: Classify entire user+agent conversations, not just individual messages. Uses the same timeout-based conversation definition as CIE.
 
 ## Requirements
 
@@ -153,20 +160,25 @@ The pipeline follows a 4-step sequential workflow:
 
 The pipeline uses a **context** system for different categorization tasks. Simply change `--context_name` to run any classifier:
 
-- **SENTIMENT**: Classify message sentiment (positive, negative, neutral, mixed)
-- **ESCALATION**: Classify urgency level (urgent, high, medium, low)
-- **FEEDBACK**: Classify feedback type (bug_report, feature_request, improvement, praise, question)
+**Message-level classifiers** (one label per user message):
+- **SENTIMENT**: positive, negative, neutral, mixed
+- **ESCALATION**: urgent, high, medium, low
+- **FEEDBACK**: bug_report, feature_request, improvement, praise, question
+
+**Conversation-level classifiers** (one label per full user+agent conversation):
+- **CONVERSATION_RESOLUTION**: resolved, partially_resolved, unresolved, unclear
+- **CONVERSATION_SATISFACTION**: satisfied, neutral, dissatisfied, escalated
+- **CONVERSATION_INTENT**: technical_support, billing_and_payments, account_management, product_information, complaint, general_inquiry
 
 **Same commands, different contexts:**
 ```bash
-# Run SENTIMENT classifier
+# Message-level
 categorization make_context --context_name SENTIMENT --start_date 2025-10-01 --end_date 2025-10-31
-
-# Run ESCALATION classifier (exact same command pattern!)
 categorization make_context --context_name ESCALATION --start_date 2025-10-01 --end_date 2025-10-31
 
-# Run FEEDBACK classifier
-categorization make_context --context_name FEEDBACK --start_date 2025-10-01 --end_date 2025-10-31
+# Conversation-level (add --workflow_name to speed up the BQ query)
+categorization make_context --context_name CONVERSATION_SATISFACTION \
+  --start_date 2025-10-01 --end_date 2025-10-31 --n_samples 50 --workflow_name azteca
 ```
 
 All commands accept `--context_name` (defaults to SENTIMENT if not specified).
@@ -191,9 +203,10 @@ categorization make_context \
 **Parameters:**
 - `--start_date` (required): Start date in YYYY-MM-DD format
 - `--end_date` (required): End date in YYYY-MM-DD format
-- `--n_samples` (optional, default: 1000): Number of messages to sample
-- `--min_length` (optional, default: 6): Minimum message length in characters
+- `--n_samples` (optional, default: 1000): Number of messages (or conversations) to sample
+- `--min_length` (optional, default: 6): Minimum message/conversation length in characters
 - `--context_name` (optional, default: SENTIMENT): Categorization context
+- `--workflow_name` (optional): Filter by bot name (e.g. `azteca`). Speeds up conversation-mode queries significantly.
 
 **Output:**
 ```
@@ -592,24 +605,42 @@ experiments/
 
 The final labeled parquet file (`{context}_labeled.parquet`) contains all original columns plus your classifier's output column:
 
-**Common columns (all classifiers):**
+**Message-level classifiers — common columns:**
 
-| Column | Type | Description | Example |
-|--------|------|-------------|---------|
-| `workflow_id` | string | Workflow identifier | "wa-company-bot-prd" |
-| `workflow_name` | string | Workflow display name | "Company Support Bot" |
-| `message_id` | string | Unique message ID | "msg_abc123" |
-| `message_text` | string | User message content | "Thank you for your help!" |
-| `event_timestamp` | timestamp | When message was sent | 2025-10-15 14:30:22 |
-| `step_name` | string | Conversation step | "initial_contact" |
+| Column | Type | Description |
+|--------|------|-------------|
+| `workflow_id` | string | Workflow identifier |
+| `workflow_name` | string | Bot/workflow display name |
+| `message_id` | string | Unique message ID |
+| `message_text` | string | User message content |
+| `event_timestamp` | timestamp | When message was sent |
+| `step_name` | string | Conversation step |
 
-**Classifier-specific column (configured in `output_column`):**
+**Conversation-level classifiers — common columns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `conversation_id` | string | `{first_message_id}_{last_message_id}` — same as CIE's `convo_id_composite` |
+| `workflow_id` | string | Workflow identifier |
+| `workflow_name` | string | Bot/workflow display name |
+| `user_id` | string | User phone number or identifier |
+| `conversation_start_time` | timestamp | Timestamp of the first message |
+| `conversation_end_time` | timestamp | Timestamp of the last message |
+| `message_count` | int | Total messages (user + agent) in the conversation |
+| `conversation_text` | string | Full turn-by-turn transcript: `User: ...\nAssistant: ...` |
+
+**Classifier-specific output column:**
 
 | Classifier | Output Column | Example Values |
 |------------|---------------|----------------|
 | SENTIMENT | `sentiment` | positive, negative, neutral, mixed |
 | ESCALATION | `urgency_level` | urgent, high, medium, low |
 | FEEDBACK | `feedback_type` | bug_report, feature_request, improvement, praise, question |
+| CONVERSATION_RESOLUTION | `resolution_status` | resolved, partially_resolved, unresolved, unclear |
+| CONVERSATION_SATISFACTION | `satisfaction_level` | satisfied, neutral, dissatisfied, escalated |
+| CONVERSATION_INTENT | `conversation_intent` | technical_support, billing_and_payments, account_management, product_information, complaint, general_inquiry |
+
+> **`conversation_id` explained:** This is a composite key built from exactly two BigQuery `message_id` values — the first and last message of the conversation. You can always join it back to the raw `_context.parquet` file, which contains one row per message with a matching `conversation_id` column.
 
 **Example: SENTIMENT labeled output**
 ```python
@@ -775,10 +806,40 @@ The pipeline includes 3 production-ready classifiers:
 | `system_prompt` | Yes | System instruction for the LLM | `"You are an expert..."` |
 | `user_prompt_template` | Yes | Prompt template with `{message}` placeholder | `"Classify: {message}"` |
 | `output_column` | Yes | Column name for labels in output parquet | `"sentiment"` |
+| `unit` | No | `"message"` (default) or `"conversation"` | `"conversation"` |
+| `conversation_timeout` | No | Inactivity gap defining conversation boundary (default: `"30m"`) | `"30m"`, `"1h"`, `"2d"` |
 | `model` | No | OpenAI model (default: `"gpt-4o-mini"`) | `"gpt-4o"` |
 | `temperature` | No | Sampling temperature (default: `0`) | `0` |
 | `max_tokens` | No | Max tokens in response (default: `10`) | `20` |
 | `use_generic_query` | No | Use generic SQL query (default: `True`) | `True` |
+
+### Adding a Conversation-Level Classifier
+
+Set `unit: "conversation"` and use `{message}` in your prompt template (it will contain the full conversation transcript):
+
+```python
+"MY_CONV_CLASSIFIER": {
+    "context_name": "MY_CONV_CLASSIFIER",
+    "unit": "conversation",
+    "conversation_timeout": "30m",
+    "system_prompt": "You are an expert at classifying customer service conversations.",
+    "user_prompt_template": """Classify the following conversation into one of these categories:
+- category1: Description
+- category2: Description
+
+Respond with ONLY the category name.
+
+Conversation:
+{message}""",
+    "output_column": "my_label",
+    "model": "gpt-4o-mini",
+    "temperature": 0,
+    "max_tokens": 20,
+    "use_generic_query": True,
+},
+```
+
+The pipeline will automatically extract all messages (user + agent turns), group them into conversations using the timeout-based definition (matching CIE), and submit one classification request per conversation.
 
 ### Prompt Engineering Tips
 
@@ -1007,7 +1068,16 @@ The system auto-generates these filenames from your context name - no manual con
 
 ## Version History & Roadmap
 
-### Current Release (v1.0.0)
+### Current Release (v1.1.0) — Conversation-Level Tagging
+
+**New in v1.1.0:**
+- Conversation-level classification: classify entire user+agent conversations as one unit
+- 3 new conversation classifiers: CONVERSATION_RESOLUTION, CONVERSATION_SATISFACTION, CONVERSATION_INTENT
+- `--workflow_name` filter on `make_context` for faster BQ queries
+- Conversation splitting done directly in SQL (BigQuery window functions), matching the CIE `convo_id_composite` definition exactly
+- `unit` and `conversation_timeout` fields in classifier config
+
+### v1.0.0 — Initial Release
 
 **Architecture:**
 - Prompt-driven classifier system (80% reduction in boilerplate)
@@ -1021,28 +1091,13 @@ The system auto-generates these filenames from your context name - no manual con
 - ESCALATION (urgent, high, medium, low)
 - FEEDBACK (bug_report, feature_request, improvement, praise, question)
 
-**Features:**
-- BigQuery data extraction
-- OpenAI Batch API integration (50% cost savings)
-- Automatic experiment tracking
-- Robust error handling and retries
-- Metadata-driven state management
-- CLI with 9 commands
-
 ### Future Roadmap
 
 **Planned Features:**
 - BigQuery upload step (write labeled data back to BQ)
 - Parallel batch processing (run multiple classifiers simultaneously)
-- Custom SQL query support (override generic query per classifier)
 - Batch status monitoring dashboard
 - Cost tracking and optimization tools
-
-**Potential New Classifiers:**
-- INTENT (determine user's primary intent)
-- LANGUAGE (detect message language)
-- TOPIC (classify message topic/category)
-- TONE (detect communication tone)
 
 ---
 
