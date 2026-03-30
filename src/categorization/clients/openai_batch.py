@@ -4,9 +4,11 @@ OpenAI Batch API Client
 Generic client for batch categorization tasks using OpenAI's Batch API (50% cheaper).
 Supports sentiment analysis, escalation detection, and other classification tasks.
 """
+# mypy: disable-error-code="no-untyped-def,return"
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -20,6 +22,10 @@ from openai import (
 
 from categorization.settings.credentials import OPENAI_API_KEY
 from categorization.settings.log import logger
+from categorization.settings.pricing import (
+    BATCH_DISCOUNT,
+    get_model_pricing,
+)
 
 T = TypeVar("T")
 
@@ -291,6 +297,7 @@ class OpenAIBatchClient:
         total_output_tokens = 0
         successful = 0
         failed = 0
+        model_name: str | None = None
 
         with open(results_path, "r") as f:
             for line in f:
@@ -300,13 +307,23 @@ class OpenAIBatchClient:
                     failed += 1
                 else:
                     successful += 1
-                    usage = result["response"]["body"]["usage"]
+                    body = result["response"]["body"]
+                    usage = body["usage"]
                     total_input_tokens += usage["prompt_tokens"]
                     total_output_tokens += usage["completion_tokens"]
+                    if model_name is None:
+                        model_name = body.get("model")
 
-        # Calculate cost with 50% Batch API discount
-        input_cost = (total_input_tokens / 1_000_000) * 0.150 * 0.5
-        output_cost = (total_output_tokens / 1_000_000) * 0.600 * 0.5
+        # Calculate cost using configurable per-model pricing with batch discount
+        pricing = get_model_pricing(model_name or "") if model_name else None
+        if pricing:
+            input_cost = (total_input_tokens / 1_000_000) * pricing["input"] * BATCH_DISCOUNT
+            output_cost = (total_output_tokens / 1_000_000) * pricing["output"] * BATCH_DISCOUNT
+        else:
+            if model_name:
+                logger.warning(f"Unknown model pricing for '{model_name}' — cost reported as $0.00")
+            input_cost = 0.0
+            output_cost = 0.0
         total_cost = input_cost + output_cost
 
         stats = {
@@ -400,6 +417,107 @@ class OpenAIBatchClient:
             )
 
         return labels
+
+    def label_realtime(
+        self,
+        messages: list[str],
+        system_prompt: str,
+        user_prompt_template: str,
+        model: str = "gpt-4o-mini",
+        temperature: float = 0,
+        max_tokens: int = 10,
+        max_workers: int = 20,
+    ) -> tuple[list[str], dict[str, Any]]:
+        """
+        Label messages using real-time Chat Completions API with concurrent requests.
+
+        Args:
+            messages: List of message texts to classify
+            system_prompt: System instruction for the model
+            user_prompt_template: Prompt template with {message} placeholder
+            model: OpenAI model to use
+            temperature: Sampling temperature
+            max_tokens: Maximum response tokens
+            max_workers: Number of concurrent API threads
+
+        Returns:
+            Tuple of (labels list, stats dict)
+        """
+        total = len(messages)
+        labels: list[str] = ["error"] * total
+        stats: dict[str, Any] = {
+            "successful": 0,
+            "failed": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_cost": 0.0,
+        }
+
+        logger.info(
+            "Starting real-time labeling",
+            details=f"{total} messages, {max_workers} concurrent workers",
+        )
+
+        def label_one(idx: int, message: str) -> tuple[int, str, int, int]:
+            def call_api():
+                return self.client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": user_prompt_template.format(message=message),
+                        },
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+
+            response = retry_with_backoff(call_api)
+            label = response.choices[0].message.content.strip().lower()
+            return idx, label, response.usage.prompt_tokens, response.usage.completion_tokens
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(label_one, idx, msg): idx
+                for idx, msg in enumerate(messages)
+            }
+            for future in as_completed(futures):
+                try:
+                    idx, label, in_tok, out_tok = future.result()
+                    labels[idx] = label
+                    stats["successful"] += 1
+                    stats["input_tokens"] += in_tok
+                    stats["output_tokens"] += out_tok
+                except Exception as e:
+                    idx = futures[future]
+                    labels[idx] = "error"
+                    stats["failed"] += 1
+                    logger.warning(f"Request {idx} failed: {e}")
+
+                completed += 1
+                if completed % 100 == 0 or completed == total:
+                    pct = completed / total * 100
+                    logger.info(f"Progress: {completed}/{total} ({pct:.0f}%)")
+
+        # Cost at full real-time rate (no batch discount)
+        pricing = get_model_pricing(model)
+        if pricing:
+            input_cost = (stats["input_tokens"] / 1_000_000) * pricing["input"]
+            output_cost = (stats["output_tokens"] / 1_000_000) * pricing["output"]
+        else:
+            logger.warning(f"Unknown model pricing for '{model}' — cost reported as $0.00")
+            input_cost = 0.0
+            output_cost = 0.0
+        stats["total_cost"] = input_cost + output_cost
+
+        logger.success(
+            "Real-time labeling complete",
+            details=f"Success: {stats['successful']}, Failed: {stats['failed']}, Cost: ${stats['total_cost']:.4f}",
+        )
+
+        return labels, stats
 
     # Backward compatibility alias
     def parse_sentiments(self, results_path: Path, total_requests: int) -> list[str]:

@@ -8,7 +8,7 @@ Enables automatic discovery of experiments and tracking of pipeline progress.
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from categorization.settings.log import logger
 
@@ -38,7 +38,7 @@ class ExperimentMetadata:
         context_name: str,
         unit: str = "message",
         conversation_timeout: str = "30m",
-        workflow_name: str | None = None,
+        workflow_names: str | None = None,
         base_dir: str = "experiments",
     ) -> "ExperimentMetadata":
         """
@@ -66,7 +66,7 @@ class ExperimentMetadata:
         experiment_dir.mkdir(parents=True, exist_ok=True)
 
         # Create metadata
-        metadata = {
+        metadata: dict[str, Any] = {
             "experiment_id": experiment_id,
             "context_name": context_name,
             "created_at": datetime.now().isoformat(),
@@ -77,7 +77,7 @@ class ExperimentMetadata:
                 "min_length": min_length,
                 "unit": unit,
                 "conversation_timeout": conversation_timeout,
-                "workflow_name": workflow_name,
+                "workflow_names": workflow_names,
             },
             "steps_completed": [],
             "batch_info": None,
@@ -111,6 +111,7 @@ class ExperimentMetadata:
         experiment_id: str | None = None,
         base_dir: str = "experiments",
         context_name: str | None = None,
+        workflow_names: str | None = None,
     ) -> "ExperimentMetadata":
         """
         Load existing experiment.
@@ -128,38 +129,60 @@ class ExperimentMetadata:
             if not experiment_dir.exists():
                 raise ValueError(f"Experiment not found: {experiment_id}")
         else:
-            # Auto-discover latest experiment (optionally filtered by context)
-            experiment_dir = cls._find_latest_experiment(base_dir, context_name)
-            if not experiment_dir:
+            # Auto-discover latest experiment filtered by context and optionally workflow_names
+            found = cls._find_latest_experiment(base_dir, context_name, workflow_names)
+            if not found:
                 context_msg = f" for context '{context_name}'" if context_name else ""
                 raise ValueError(
                     f"No experiments found{context_msg} in {base_dir}. Run make_context first."
                 )
+            experiment_dir = found
 
         return cls(experiment_dir)
 
     @staticmethod
     def _find_latest_experiment(
-        base_dir: str = "experiments", context_name: str | None = None
+        base_dir: str = "experiments",
+        context_name: str | None = None,
+        workflow_names: str | None = None,
     ) -> Path | None:
         """
-        Find most recent experiment folder.
+        Find most recent experiment folder, optionally filtered by context and workflow_names.
 
         Args:
             base_dir: Base directory for experiments
-            context_name: Optional context name to filter by (e.g., "SENTIMENT")
+            context_name: Optional context name to filter by (e.g., "CONVERSATIONS")
+            workflow_names: Optional comma-separated workflow names to match against metadata
 
         Returns:
-            Path to latest experiment or None
+            Path to latest matching experiment or None
         """
         base_path = Path(base_dir)
         if not base_path.exists():
             return None
 
-        # Use context-specific pattern or generic pattern
         pattern = f"{context_name.lower()}_*" if context_name else "*_*"
-        experiments = sorted(base_path.glob(pattern))
-        return experiments[-1] if experiments else None
+        candidates = sorted(base_path.glob(pattern))
+
+        if not workflow_names:
+            return candidates[-1] if candidates else None
+
+        # Filter by workflow_names stored in metadata
+        normalized = ",".join(sorted(n.strip() for n in workflow_names.split(",")))
+        for experiment_dir in reversed(candidates):
+            metadata_file = experiment_dir / "metadata.json"
+            if not metadata_file.exists():
+                continue
+            with open(metadata_file) as f:
+                meta = json.load(f)
+            stored = meta.get("parameters", {}).get("workflow_names", "")
+            if stored:
+                stored_normalized = ",".join(sorted(n.strip() for n in stored.split(",")))
+                if stored_normalized == normalized:
+                    return experiment_dir
+
+        # Fall back to latest if no workflow_names match
+        return candidates[-1] if candidates else None
 
     @staticmethod
     def list_experiments(
@@ -205,7 +228,7 @@ class ExperimentMetadata:
     def _load_metadata(self) -> dict[str, Any]:
         """Load metadata from file"""
         with open(self.metadata_file, "r") as f:
-            return json.load(f)
+            return cast(dict[str, Any], json.load(f))
 
     def _save_metadata(self) -> None:
         """Save metadata to file"""
@@ -234,7 +257,14 @@ class ExperimentMetadata:
 
         logger.success(f"Step completed: {step_name}", details=f"Stats: {stats}")
 
-    def save_batch_info(self, batch_id: str, file_id: str, total_requests: int) -> None:
+    def save_batch_info(
+        self,
+        batch_id: str,
+        file_id: str,
+        total_requests: int,
+        extraction_context: str | None = None,
+        classifier: str | None = None,
+    ) -> None:
         """
         Save batch submission details.
 
@@ -242,6 +272,8 @@ class ExperimentMetadata:
             batch_id: OpenAI batch ID
             file_id: OpenAI file ID
             total_requests: Number of requests in batch
+            extraction_context: Context name used for data extraction (e.g. "CONVERSATIONS")
+            classifier: Classifier applied (e.g. "CONVERSATION_SENTIMENT")
         """
         batch_info = {
             "batch_id": batch_id,
@@ -256,6 +288,8 @@ class ExperimentMetadata:
                 datetime.now().timestamp() + 24 * 3600
             ).isoformat(),
             "cost": {"input_tokens": None, "output_tokens": None, "total_cost": None},
+            "extraction_context": extraction_context,
+            "classifier": classifier,
         }
 
         # Save to separate batch_info.json file
@@ -267,6 +301,8 @@ class ExperimentMetadata:
             "batch_id": batch_id,
             "status": "submitted",
             "submitted_at": batch_info["submitted_at"],
+            "extraction_context": extraction_context,
+            "classifier": classifier,
         }
         self._save_metadata()
 
@@ -281,7 +317,7 @@ class ExperimentMetadata:
             return None
 
         with open(self.batch_info_file, "r") as f:
-            return json.load(f)
+            return cast(dict[str, Any], json.load(f))
 
     def update_batch_status(
         self,
@@ -356,7 +392,7 @@ class ExperimentMetadata:
 
     def get_parameters(self) -> dict[str, Any]:
         """Get experiment parameters"""
-        return self.metadata["parameters"]
+        return cast(dict[str, Any], self.metadata["parameters"])
 
     def is_step_completed(self, step_name: str) -> bool:
         """Check if a step has been completed"""
@@ -364,7 +400,7 @@ class ExperimentMetadata:
 
     def get_stats(self) -> dict[str, Any]:
         """Get experiment statistics"""
-        return self.metadata["stats"]
+        return cast(dict[str, Any], self.metadata["stats"])
 
     def print_status(self) -> None:
         """Print detailed experiment status"""

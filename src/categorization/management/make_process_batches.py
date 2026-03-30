@@ -1,10 +1,14 @@
 """
-Step 3b: Download and Process Batch Results
+Step 4 (batch mode only): Download and Process Batch Results
 
-Checks batch status, downloads results when ready, and creates labeled dataset.
+Polls the OpenAI Batch API for completion, downloads results, parses labels,
+and writes the labeled dataset + combined CSV.
+
+Only needed when make_label was run with --mode batch.
 """
 
 from categorization.clients.openai_batch import OpenAIBatchClient
+from categorization.management.make_label import _rebuild_combined_csv
 from categorization.pipelines.classifiers import get_classifier_config
 from categorization.settings.log import logger
 from categorization.utils.classifier_utils import (
@@ -16,71 +20,71 @@ from categorization.utils.utils import load_parquet_with_validation, save_parque
 
 
 def make_process_batches(
-    experiment_id: str | None = None,
-    context_name: str = "SENTIMENT",
+    context_name: str = "CONVERSATIONS",
+    workflow_names: str | None = None,
 ) -> tuple[str, str]:
     """
     Download and process batch results from OpenAI.
 
+    The extraction context and classifier are read from batch_info saved by
+    make_label --mode batch, so no additional parameters are needed.
+
     Args:
-        experiment_id: Experiment ID (None = auto-detect latest)
-        context_name: Pipeline context name
+        context_name: Extraction context used to find the experiment (e.g. "CONVERSATIONS")
+        workflow_names: Comma-separated workflow names to pinpoint the right experiment.
 
     Returns:
-        Tuple of (experiment_id, status)
+        Tuple of (experiment_id, status) where status is one of:
+        "completed", "in_progress", "failed", or the raw OpenAI status string
     """
     logger.phase_start("make_process_batches", details="Checking batch status")
 
-    # Load experiment metadata
     metadata = ExperimentMetadata.load(
-        experiment_id=experiment_id, context_name=context_name
+        context_name=context_name, workflow_names=workflow_names
     )
     experiment_id = metadata.experiment_id
 
-    logger.info(f"Processing experiment: {experiment_id}")
+    logger.info(f"Experiment: {experiment_id}")
 
-    # Check if labeling was completed
     if not metadata.is_step_completed("labeling"):
         raise ValueError(
-            "Labeling step not completed. Run 'categorization make_labeling' first."
+            "Labeling step not completed. Run 'categorization make_label --mode batch' first."
         )
 
-    # Get batch info
     batch_info = metadata.get_batch_info()
     if not batch_info:
         raise ValueError(
-            "No batch info found. Run 'categorization make_labeling' first."
+            "No batch info found. Run 'categorization make_label --mode batch' first."
         )
 
     batch_id = batch_info["batch_id"]
 
-    # Get configuration from unified registry
-    classifier_config = get_classifier_config(context_name)
+    # Resolve extraction context and classifier from batch_info (stored by make_label)
+    extraction_context = batch_info.get("extraction_context") or context_name
+    effective_classifier = batch_info.get("classifier") or context_name
+
+    classifier_config = get_classifier_config(effective_classifier)
     unit = classifier_config.get("unit", "message")
-    files = get_classifier_files(context_name)
-    step_names = get_classifier_step_names(context_name)
+    classifier_files = get_classifier_files(effective_classifier)
+    step_names = get_classifier_step_names(effective_classifier)
 
-    # Branch on unit for required columns and label descriptions
-    if unit == "conversation":
-        required_cols = ["conversation_text"]
-        item_label = "conversations"
-    else:
-        required_cols = ["message_id", "message_text"]
-        item_label = "messages"
+    item_label = "conversations" if unit == "conversation" else "messages"
+    required_cols = (
+        ["conversation_text"] if unit == "conversation" else ["message_id", "message_text"]
+    )
 
-    logger.info(f"Processing: {step_names['process_batches']} (unit={unit})")
+    logger.info(
+        f"Processing: {step_names['process_batches']}",
+        details=f"Classifier: {effective_classifier}, unit={unit}",
+    )
 
-    # Initialize OpenAI Batch client
     batch_client = OpenAIBatchClient()
 
-    # Check batch status
     logger.info(f"Checking status for batch: {batch_id}")
     status_info = batch_client.check_status(batch_id)
-
     status = status_info["status"]
 
-    if status == "in_progress" or status == "validating":
-        # Batch still processing
+    if status in ("in_progress", "validating"):
         completed = status_info["completed_requests"]
         total = status_info["total_requests"]
         progress_pct = (completed / total * 100) if total > 0 else 0
@@ -89,25 +93,18 @@ def make_process_batches(
             f"Batch still processing: {status}",
             details=f"Progress: {completed}/{total} ({progress_pct:.1f}%)",
         )
-
-        # Update batch status
         metadata.update_batch_status(
             status=status,
             completed_requests=completed,
             failed_requests=status_info["failed_requests"],
         )
-
         return experiment_id, "in_progress"
 
     elif status == "completed":
-        # Batch completed - download results
-        logger.info("Batch completed! Downloading results...")
+        logger.info("Batch completed — downloading results")
 
-        # Download results
-        results_file = metadata.experiment_dir / files["batch_results"]
-        stats = batch_client.download_results(
-            batch_id=batch_id, output_path=results_file
-        )
+        results_file = metadata.experiment_dir / classifier_files["batch_results"]
+        stats = batch_client.download_results(batch_id=batch_id, output_path=results_file)
 
         logger.success(
             "Results downloaded",
@@ -115,30 +112,30 @@ def make_process_batches(
             f"(Success: {stats['successful']}, Failed: {stats['failed']})",
         )
 
-        # Parse labels from results
         output_column = classifier_config["output_column"]
-        logger.info(f"Parsing {output_column} labels")
         labels = batch_client.parse_labels(
             results_path=results_file, total_requests=batch_info["total_requests"]
         )
 
-        # Load preprocessed data and add labels
-        input_file = metadata.experiment_dir / files["preprocessed_output"]
+        # Load preprocessed data from extraction context
+        source_files = get_classifier_files(extraction_context)
+        input_file = metadata.experiment_dir / source_files["preprocessed_output"]
         df = load_parquet_with_validation(
             file_path=input_file,
             step_name="process_batches",
             required_columns=required_cols,
         )
 
-        # Add label column (configurable column name)
         df[output_column] = labels
+        labeled_count = sum(1 for lbl in labels if lbl != "error")
 
-        # Save labeled data
-        output_file = metadata.experiment_dir / files["labeled_output"]
+        # Save labeled parquet
+        output_file = metadata.experiment_dir / classifier_files["labeled_output"]
         save_parquet(df, output_file, description=f"labeled {item_label}")
 
-        # Update metadata with results
-        labeled_count = len([label for label in labels if label != "error"])
+        # Save individual CSV
+        df.to_csv(output_file.with_suffix(".csv"), index=False)
+        logger.success("CSV export saved", details=str(output_file.with_suffix(".csv")))
 
         metadata.update_batch_status(
             status="completed",
@@ -150,49 +147,37 @@ def make_process_batches(
                 "total_cost": stats["total_cost"],
             },
         )
-
         metadata.update_step(
             step_name="process_batches",
-            stats={f"{item_label}_labeled": labeled_count},
+            stats={
+                f"{item_label}_labeled": labeled_count,
+                "classifier": effective_classifier,
+            },
         )
         metadata.update_file("labeled")
 
-        logger.phase_complete("make_process_batches", count=labeled_count)
-
-        logger.success(
-            "Batch processing complete",
-            details=f"Labeled: {labeled_count:,} {item_label}, Cost: ${stats['total_cost']:.4f}",
-        )
-
-        # Show label distribution
-        logger.info(f"{output_column.capitalize()} distribution:")
+        # Log label distribution
+        logger.info(f"{output_column} distribution:")
         df_clean = df[df[output_column] != "error"]
-
         if len(df_clean) > 0:
-            label_counts = df_clean[output_column].value_counts()
-            for label, count in label_counts.items():
-                pct = (count / len(df_clean) * 100) if len(df_clean) > 0 else 0
-                logger.info(f"  {label}: {count:,} ({pct:.1f}%)")
+            for label_val, count in df_clean[output_column].value_counts().items():
+                pct = count / len(df_clean) * 100
+                logger.info(f"  {label_val}: {count:,} ({pct:.1f}%)")
         else:
-            logger.warning("All labels returned errors - no successful categorizations")
+            logger.warning("All labels returned errors — no successful classifications")
 
-        logger.success(
-            f"Processed batch results: {step_names['process_batches']}",
-            details=f"Labeled: {labeled_count:,} {item_label}",
-        )
+        # Rebuild combined CSV
+        combined_csv = _rebuild_combined_csv(metadata.experiment_dir, input_file)
+        logger.success("Combined CSV updated", details=combined_csv)
 
+        logger.phase_complete("make_process_batches", count=labeled_count)
         return experiment_id, "completed"
 
     elif status == "failed":
-        # Batch failed
-        logger.error(f"Batch failed with status: {status}")
-
+        logger.error(f"Batch failed: {status}")
         metadata.update_batch_status(status="failed")
-
         return experiment_id, "failed"
 
     else:
-        # Unknown status
         logger.warning(f"Unknown batch status: {status}")
-
         return experiment_id, status

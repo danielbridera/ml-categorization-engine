@@ -97,7 +97,10 @@ def get_conversation_query_path() -> Path:
 
 
 def get_classifier_query_path(
-    context_name: str, use_generic: bool = True, unit: str = "message"
+    context_name: str,
+    use_generic: bool = True,
+    unit: str = "message",
+    sql_query_path: str | None = None,
 ) -> Path:
     """
     Get the SQL query path for a classifier context.
@@ -115,7 +118,13 @@ def get_classifier_query_path(
             return get_conversation_query_path()
         return get_generic_query_path()
 
-    # For custom context-specific queries
+    # Explicit path override from classifier config
+    if sql_query_path:
+        from categorization.settings import BASE_PATH
+
+        return BASE_PATH / sql_query_path
+
+    # Auto-derive path from context name
     from categorization.settings.queries import CONTEXT_QUERIES_PATH
 
     context_dir = CONTEXT_QUERIES_PATH / context_name.lower()

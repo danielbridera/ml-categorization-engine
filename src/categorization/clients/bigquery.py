@@ -1,10 +1,39 @@
-from typing import Any
+# mypy: disable-error-code="no-untyped-def"
+import time
+from typing import Any, Callable, TypeVar
 
 import pandas as pd
+from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable
 from google.cloud import bigquery
 
 from categorization.settings.credentials import GOOGLE_CLOUD_PROJECT
 from categorization.settings.log import logger
+
+_BQ_RETRYABLE = (ServiceUnavailable, ConnectionError, TimeoutError)
+
+_T = TypeVar("_T")
+
+
+def _retry_bq(func: Callable[[], _T], max_retries: int = 3, initial_delay: float = 2.0) -> _T:
+    """Retry a BigQuery call with exponential backoff on transient errors."""
+    delay = initial_delay
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except _BQ_RETRYABLE as e:
+            if attempt == max_retries:
+                raise
+            logger.warning(
+                f"BigQuery transient error (attempt {attempt + 1}/{max_retries}): {e}. "
+                f"Retrying in {delay}s..."
+            )
+            time.sleep(delay)
+            delay *= 2
+        except GoogleAPICallError as e:
+            # Non-retryable API errors (bad query, permissions, etc.)
+            logger.error(f"BigQuery API error: {e}")
+            raise
+    raise RuntimeError("Unreachable")
 
 
 class BigQueryClient:
@@ -81,9 +110,11 @@ class BigQueryClient:
         """
         logger.info(f"Executing query and converting to DataFrame for: {output_path}")
 
-        # Execute query and convert directly to DataFrame (most efficient way)
-        job = self.client.query(query)
-        df = job.to_dataframe()
+        def _run():
+            job = self.client.query(query)
+            return job.to_dataframe()
+
+        df = _retry_bq(_run)
 
         if df.empty:
             logger.warning("No records found in query results")
@@ -119,8 +150,12 @@ class BigQueryClient:
                 pandas.DataFrame: DataFrame containing the query results.
         """
         logger.info("Executing query and converting to DataFrame")
-        job = self.client.query(query)
-        df = job.to_dataframe()
+
+        def _run():
+            job = self.client.query(query)
+            return job.to_dataframe()
+
+        df = _retry_bq(_run)
 
         logger.info(
             f"Retrieved DataFrame with {len(df)} rows and {len(df.columns)} columns"

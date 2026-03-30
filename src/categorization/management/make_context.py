@@ -8,7 +8,11 @@ a new experiment with the extracted data.
 import pandas as pd
 
 from categorization.clients.bigquery import BigQueryClient
-from categorization.pipelines.classifiers import get_classifier_config
+from categorization.pipelines.classifiers import (
+    CLASSIFIERS,
+    EXTRACTION_CONTEXTS,
+    get_classifier_config,
+)
 from categorization.settings.log import logger
 from categorization.utils.classifier_utils import (
     get_classifier_files,
@@ -25,8 +29,10 @@ def make_context(
     end_date: str,
     n_samples: int = 1000,
     min_length: int = 6,
-    context_name: str = "SENTIMENT",
-    workflow_name: str | None = None,
+    context_name: str = "CONVERSATIONS",
+    workflow_names: str | None = None,
+    sql_query_path: str | None = None,
+    unit: str = "message",
 ) -> str:
     """
     Extract messages from BigQuery and create new experiment.
@@ -34,11 +40,12 @@ def make_context(
     Args:
         start_date: Start date for extraction (YYYY-MM-DD)
         end_date: End date for extraction (YYYY-MM-DD)
-        n_samples: Number of messages to extract
+        n_samples: Number of messages to extract per workflow (if workflow_names provided)
         min_length: Minimum message length
-        context_name: Pipeline context name
-        workflow_name: Optional workflow name to filter (e.g. "my_bot"). Speeds up
-                       conversation-mode queries significantly.
+        context_name: Pipeline context name (e.g. "CONVERSATIONS")
+        workflow_names: Comma-separated workflow names to filter (e.g. "bot1,bot2")
+        sql_query_path: Override SQL query path (required for fully custom contexts)
+        unit: Classification unit — "message" or "conversation"
 
     Returns:
         Experiment ID
@@ -60,10 +67,29 @@ def make_context(
     if n_samples > 1_000_000:
         logger.warning(f"Large n_samples may cause memory issues: {n_samples:,}")
 
-    # Get configuration from unified registry first (needed for metadata)
-    classifier_config = get_classifier_config(context_name)
-    unit = classifier_config.get("unit", "message")
-    conversation_timeout = classifier_config.get("conversation_timeout", "30m")
+    # Get unit, timeout, and SQL path — from classifier registry, extraction contexts, or explicit override
+    if context_name in CLASSIFIERS:
+        classifier_config = get_classifier_config(context_name)
+        unit = classifier_config.get("unit", unit)
+        conversation_timeout = classifier_config.get("conversation_timeout", "30m")
+    elif context_name in EXTRACTION_CONTEXTS:
+        extraction_ctx = EXTRACTION_CONTEXTS[context_name]
+        sql_query_path = sql_query_path or extraction_ctx["sql_query_path"]
+        unit = extraction_ctx.get("unit", unit)
+        classifier_config = None
+        conversation_timeout = "30m"
+    else:
+        if sql_query_path is None:
+            available_classifiers = ", ".join(sorted(CLASSIFIERS.keys()))
+            available_contexts = ", ".join(sorted(EXTRACTION_CONTEXTS.keys()))
+            raise ValueError(
+                f"Unknown context: '{context_name}'. "
+                f"Available classifiers: {available_classifiers}. "
+                f"Available extraction contexts: {available_contexts}. "
+                f"Or provide --sql_query_path for a fully custom context."
+            )
+        classifier_config = None
+        conversation_timeout = "30m"
 
     # Create new experiment
     metadata = ExperimentMetadata.create_new(
@@ -74,7 +100,7 @@ def make_context(
         context_name=context_name,
         unit=unit,
         conversation_timeout=conversation_timeout,
-        workflow_name=workflow_name,
+        workflow_names=workflow_names,
     )
 
     experiment_id = metadata.experiment_id
@@ -83,18 +109,23 @@ def make_context(
     files = get_classifier_files(context_name)
     step_names = get_classifier_step_names(context_name)
 
-    # Get SQL query path (generic or custom), routing by unit type
-    use_generic = classifier_config.get("use_generic_query", True)
-    query_path = get_classifier_query_path(
-        context_name, use_generic=use_generic, unit=unit
-    )
-
-    if workflow_name:
-        logger.info(
-            f"Processing: {step_names['context']} (unit={unit}, workflow={workflow_name})"
+    # Get SQL query path — explicit override takes priority, then registry config
+    if sql_query_path:
+        query_path = get_classifier_query_path(
+            context_name, use_generic=False, sql_query_path=sql_query_path
+        )
+    elif classifier_config is not None:
+        use_generic = classifier_config.get("use_generic_query", True)
+        query_path = get_classifier_query_path(
+            context_name,
+            use_generic=use_generic,
+            unit=unit,
+            sql_query_path=classifier_config.get("sql_query_path"),
         )
     else:
-        logger.info(f"Processing: {step_names['context']} (unit={unit})")
+        query_path = get_classifier_query_path(context_name, use_generic=True, unit=unit)
+
+    logger.info(f"Processing: {step_names['context']} (unit={unit})")
 
     # Load SQL query template
     query_template = load_query(query_path)
@@ -102,17 +133,26 @@ def make_context(
     # Format query with parameters
     # workflow_name_filter is only injected for conversation-mode queries
     # (generic_text_classification.sql does not have this placeholder)
+    # Build {workflow_filter} SQL fragment
+    names = [n.strip() for n in workflow_names.split(",")] if workflow_names else []
+
+    if names:
+        names_sql = ", ".join(f"'{n}'" for n in names)
+        workflow_filter = f"AND workflow_name IN ({names_sql})"
+        workflow_names_list = names_sql
+    else:
+        workflow_filter = ""
+        workflow_names_list = ""
+
     format_kwargs: dict = {
         "start_date": start_date,
         "end_date": end_date,
         "n_samples": n_samples,
         "min_length": min_length,
+        "workflow_filter": workflow_filter,
+        "workflow_names_list": workflow_names_list,
     }
     if unit == "conversation":
-        # No table alias in CTE — plain column name
-        format_kwargs["workflow_name_filter"] = (
-            f"AND workflow_name = '{workflow_name}'" if workflow_name else ""
-        )
         # Convert timeout string (e.g. "30m") to minutes for BigQuery TIMESTAMP_DIFF
         timeout_td = parse_timeout(conversation_timeout)
         format_kwargs["conversation_timeout_minutes"] = int(
@@ -161,4 +201,4 @@ def make_context(
 
     logger.phase_complete("make_context", count=actual_count)
 
-    return experiment_id
+    return str(experiment_id)

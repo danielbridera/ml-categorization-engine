@@ -87,8 +87,8 @@ def filter_by_length(
         details=f"Min: {min_length}, Max: {max_length or 'unlimited'}",
     )
 
-    # Calculate lengths
-    lengths = df[text_col].str.len()
+    # Calculate lengths on stripped text (ignore leading/trailing whitespace)
+    lengths = df[text_col].str.strip().str.len()
 
     # Apply filters
     mask = lengths >= min_length

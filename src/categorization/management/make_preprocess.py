@@ -8,7 +8,6 @@ For conversation-unit classifiers: groups messages into conversations using
 a timeout-based inactivity window (same definition as CIE project).
 """
 
-from categorization.pipelines.classifiers import ClassifierConfig, get_classifier_config
 from categorization.settings.log import logger
 from categorization.utils.classifier_utils import (
     get_classifier_files,
@@ -29,7 +28,8 @@ from categorization.utils.utils import load_parquet_with_validation, save_parque
 
 
 def make_preprocess(
-    experiment_id: str | None = None, context_name: str = "SENTIMENT"
+    context_name: str = "CONVERSATIONS",
+    workflow_names: str | None = None,
 ) -> str:
     """
     Clean and deduplicate messages, or group them into conversations.
@@ -39,8 +39,8 @@ def make_preprocess(
     and formats turn-by-turn conversation text for LLM classification.
 
     Args:
-        experiment_id: Experiment ID (None = auto-detect latest)
-        context_name: Pipeline context name
+        context_name: Pipeline context name (e.g. "CONVERSATIONS")
+        workflow_names: Comma-separated workflow names to pinpoint the right experiment
 
     Returns:
         Experiment ID
@@ -49,15 +49,15 @@ def make_preprocess(
 
     # Load experiment metadata
     metadata = ExperimentMetadata.load(
-        experiment_id=experiment_id, context_name=context_name
+        context_name=context_name, workflow_names=workflow_names
     )
     experiment_id = metadata.experiment_id
 
     logger.info(f"Processing experiment: {experiment_id}")
 
-    # Get configuration from unified registry
-    classifier_config = get_classifier_config(context_name)
-    unit = classifier_config.get("unit", "message")
+    # Read unit from metadata (stored by make_context) — works for any context name
+    params = metadata.get_parameters()
+    unit = params.get("unit", "message")
     files = get_classifier_files(context_name)
     step_names = get_classifier_step_names(context_name)
 
@@ -65,7 +65,7 @@ def make_preprocess(
 
     if unit == "conversation":
         return _make_preprocess_conversations(
-            metadata, classifier_config, files, step_names, experiment_id
+            metadata, files, step_names, experiment_id
         )
     else:
         return _make_preprocess_messages(metadata, files, step_names, experiment_id)
@@ -145,7 +145,6 @@ def _make_preprocess_messages(
 
 def _make_preprocess_conversations(
     metadata: ExperimentMetadata,
-    classifier_config: ClassifierConfig,
     files: dict,
     step_names: dict,
     experiment_id: str,
@@ -179,10 +178,7 @@ def _make_preprocess_conversations(
         logger.info("Conversations defined by SQL — formatting turns")
         conversations_df = format_conversations_from_sessions(df)
     else:
-        timeout = classifier_config.get(
-            "conversation_timeout",
-            params.get("conversation_timeout", "30m"),
-        )
+        timeout = params.get("conversation_timeout", "30m")
         conversations_df = group_messages_into_conversations(df, timeout_str=timeout)
 
     # Filter out conversations with very short conversation_text
@@ -194,6 +190,7 @@ def _make_preprocess_conversations(
     final_count = len(conversations_df)
 
     if conversations_df.empty:
+        timeout = params.get("conversation_timeout", "30m")
         raise ValueError(
             f"Conversation preprocessing resulted in empty dataset. "
             f"Initial messages: {initial_message_count}. "

@@ -186,6 +186,63 @@ Conversation:
         "use_generic_query": True,
     },
     # ------------------------------------------------------------------------
+    # Conversation Escalation — was the conversation escalated to a human?
+    # Designed to stack on the same preprocessed CONVERSATIONS dataset.
+    # ------------------------------------------------------------------------
+    "CONVERSATION_ESCALATION": {
+        "context_name": "CONVERSATION_ESCALATION",
+        "system_prompt": (
+            "You are a customer support analyst. "
+            "Classify whether a chatbot conversation was escalated to a human agent."
+        ),
+        "user_prompt_template": """The following is a conversation between a user and an automated chatbot. Messages are labeled by speaker:
+- "user:" lines are messages sent by the customer
+- "flow:" lines are automated responses from the chatbot
+
+Classify whether the user wanted or attempted to reach a live human agent. Focus on USER INTENT, not whether the bot successfully completed the transfer.
+
+- escalated: The user explicitly requested to speak to a human agent at any point in the conversation. This includes direct requests (e.g. "asesor", "agente", "persona", "humano", "quiero hablar con alguien"), misspellings (e.g. "acesor", "assesor"), or the bot confirming a live transfer mid-chat (e.g. "te estoy transfiriendo con un agente")
+- not_escalated: The user never requested a human and the conversation was handled entirely by the bot. IMPORTANT: if the bot assigns a queue turn number for a future in-person branch visit (e.g. "ya estás en la fila", "un asesor dirá tu nombre", "pronto un asesor dirá tu nombre"), this is NOT an escalation — the user is scheduling a visit, not requesting a human in this chat
+
+Respond with ONLY the category name (escalated or not_escalated), nothing else.
+
+Conversation:
+{message}""",
+        "output_column": "escalated_to_human",
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "max_tokens": 10,
+    },
+    # ------------------------------------------------------------------------
+    # Conversation Sentiment — user sentiment across the full conversation
+    # Designed to stack on the same preprocessed CONVERSATIONS dataset.
+    # ------------------------------------------------------------------------
+    "CONVERSATION_SENTIMENT": {
+        "context_name": "CONVERSATION_SENTIMENT",
+        "system_prompt": (
+            "You are a sentiment analysis expert. "
+            "Respond only with the sentiment category."
+        ),
+        "user_prompt_template": """The following is a conversation between a user and an automated chatbot. Messages are labeled by speaker:
+- "user:" lines are messages sent by the customer
+- "flow:" lines are automated responses from the chatbot
+
+Analyze the overall sentiment expressed by the user throughout the conversation and classify it as one of these categories:
+- positive: Expresses satisfaction, gratitude, happiness, or approval
+- negative: Expresses frustration, anger, disappointment, or complaint
+- neutral: Factual, informational, or no clear emotional tone
+- mixed: Contains both positive and negative sentiments
+
+Respond with ONLY the category name (positive, negative, neutral, or mixed), nothing else.
+
+Conversation:
+{message}""",
+        "output_column": "sentiment",
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "max_tokens": 10,
+    },
+    # ------------------------------------------------------------------------
     # Feedback Type Classification
     # ------------------------------------------------------------------------
     "FEEDBACK": {
@@ -206,6 +263,23 @@ User message: {message}""",
         "temperature": 0,
         "max_tokens": 15,
         "use_generic_query": True,
+    },
+}
+
+
+# ============================================================================
+# EXTRACTION CONTEXTS
+# ============================================================================
+# Named data extraction contexts that are NOT classifiers — they define where
+# and how to pull data, independent of any labeling task. Add entries here to
+# create new first-class extraction contexts accessible via --context_name.
+
+EXTRACTION_CONTEXTS: dict[str, dict] = {
+    # Generic conversation extraction from dev-data-mlops.data_poc.v_conversations.
+    # Supports workflow filtering (--workflow_names) and date range.
+    "CONVERSATIONS": {
+        "sql_query_path": "sql/context/conversation_context.sql",
+        "unit": "message",
     },
 }
 
