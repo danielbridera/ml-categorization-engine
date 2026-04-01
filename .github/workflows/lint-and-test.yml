@@ -1,15 +1,6 @@
-# This file was automatically created by the create repository workflow. 
+# This file was automatically created by the create repository workflow.
 # Please, DO NOT CHANGE the job names, since they are used to make sure our repos
 # have a lint and test stages.
-
-# Later, complete this workflow with the steps to lint and test your code.
-# We recommend submitting test coverage to Codecov, and the unit test requirement
-# will be automatically validated!
-# Feel free to remove these comments when you're done.
-
-# If you are using Go, you are encouraged to use the centralized workflow to perform
-# these steps. You can find an usage example on the link below
-# https://github.com/yalochat/salesdesk-api/blob/main/.github/workflows/build-and-test.yml
 
 name: Lint and Test
 
@@ -22,7 +13,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Lint with ruff
+        run: uv run ruff check src/
+
+      - name: Check formatting with ruff
+        run: uv run ruff format --check src/
 
   unit-test:
     name: unit-test
@@ -30,3 +38,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run unit tests
+        run: uv run pytest tests/unit/ -vv || [ $? -eq 5 ]
