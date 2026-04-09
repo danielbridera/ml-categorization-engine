@@ -10,11 +10,13 @@ Covers:
 - EXTRACTION_CONTEXTS structure
 """
 
+import pandas as pd
 import pytest
 
 from categorization.pipelines.classifiers import (
     CLASSIFIERS,
     EXTRACTION_CONTEXTS,
+    _compute_icsat_score,
     get_classifier_config,
     get_classifier_info,
     list_classifiers,
@@ -45,7 +47,12 @@ class TestClassifierRegistry:
             assert name in CLASSIFIERS
 
     def test_all_classifiers_have_required_fields(self):
-        required = {"context_name", "system_prompt", "user_prompt_template", "output_column"}
+        required = {
+            "context_name",
+            "system_prompt",
+            "user_prompt_template",
+            "output_column",
+        }
         for name, config in CLASSIFIERS.items():
             missing = required - set(config.keys())
             assert not missing, f"Classifier {name} missing fields: {missing}"
@@ -68,9 +75,26 @@ class TestClassifierRegistry:
         conv_classifiers = [
             k for k, v in CLASSIFIERS.items() if v.get("unit") == "conversation"
         ]
-        assert len(conv_classifiers) >= 1, "Expected at least one conversation-unit classifier"
+        assert len(conv_classifiers) >= 1, (
+            "Expected at least one conversation-unit classifier"
+        )
         for name in conv_classifiers:
             assert CLASSIFIERS[name].get("unit") == "conversation"
+
+    def test_post_process_is_callable_when_present(self):
+        """Any classifier that defines post_process must be callable."""
+        for name, config in CLASSIFIERS.items():
+            if "post_process" in config:
+                assert callable(config["post_process"]), (
+                    f"Classifier {name}: post_process must be callable"
+                )
+
+    def test_icsat_present_and_configured(self):
+        assert "ICSAT" in CLASSIFIERS
+        config = CLASSIFIERS["ICSAT"]
+        assert config["output_column"] == "nps_category"
+        assert config.get("unit") == "conversation"
+        assert callable(config.get("post_process"))
 
 
 # ---------------------------------------------------------------------------
@@ -170,3 +194,52 @@ class TestExtractionContexts:
     def test_conversations_unit_is_message(self):
         ctx = EXTRACTION_CONTEXTS["CONVERSATIONS"]
         assert ctx.get("unit") == "message"
+
+
+# ---------------------------------------------------------------------------
+# _compute_icsat_score
+# ---------------------------------------------------------------------------
+
+
+class TestComputeIcsatScore:
+    def _make_df(self, labels: list[str]) -> pd.DataFrame:
+        return pd.DataFrame({"nps_category": labels})
+
+    def test_score_computed_correctly(self, caplog):
+        import logging
+
+        # test with lowercase labels (as returned by the LLM)
+        df = self._make_df(["promoter", "promoter", "passive", "detractor"])
+        with caplog.at_level(logging.INFO):
+            _compute_icsat_score(df, "nps_category")
+        # (2 - 1) / 4 * 100 = 25.0
+        assert any("25.0" in r.message for r in caplog.records)
+
+    def test_score_computed_correctly_uppercase(self, caplog):
+        import logging
+
+        # test with uppercase labels too
+        df = self._make_df(["PROMOTER", "PROMOTER", "PASSIVE", "DETRACTOR"])
+        with caplog.at_level(logging.INFO):
+            _compute_icsat_score(df, "nps_category")
+        assert any("25.0" in r.message for r in caplog.records)
+
+    def test_all_promoters(self, caplog):
+        import logging
+
+        df = self._make_df(["promoter", "promoter", "promoter"])
+        with caplog.at_level(logging.INFO):
+            _compute_icsat_score(df, "nps_category")
+        assert any("+100.0" in r.message for r in caplog.records)
+
+    def test_all_detractors(self, caplog):
+        import logging
+
+        df = self._make_df(["detractor", "detractor"])
+        with caplog.at_level(logging.INFO):
+            _compute_icsat_score(df, "nps_category")
+        assert any("-100.0" in r.message for r in caplog.records)
+
+    def test_empty_dataframe_does_not_raise(self):
+        df = self._make_df([])
+        _compute_icsat_score(df, "nps_category")  # should return silently
