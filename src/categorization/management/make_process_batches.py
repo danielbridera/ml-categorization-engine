@@ -170,6 +170,10 @@ def make_process_batches(
         else:
             logger.warning("All labels returned errors — no successful classifications")
 
+        post_fn = classifier_config.get("post_process")
+        if post_fn:
+            post_fn(df_clean, output_column)
+
         # Rebuild combined CSV
         combined_csv = _rebuild_combined_csv(metadata.experiment_dir, input_file)
         logger.success("Combined CSV updated", details=combined_csv)

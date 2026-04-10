@@ -37,13 +37,15 @@ def _rebuild_combined_csv(experiment_dir: Path, preprocessed_file: Path) -> str:
     base = pd.read_parquet(preprocessed_file)
     base_cols = set(base.columns)
 
+    id_col = "conversation_id" if "conversation_id" in base.columns else "message_id"
+
     for labeled_path in sorted(experiment_dir.glob("*_labeled.parquet")):
         labeled = pd.read_parquet(labeled_path)
         new_cols = [c for c in labeled.columns if c not in base_cols]
         if new_cols:
             base = base.merge(
-                labeled[["message_id"] + new_cols],
-                on="message_id",
+                labeled[[id_col] + new_cols],
+                on=id_col,
                 how="left",
             )
             base_cols.update(new_cols)
@@ -185,6 +187,10 @@ def make_label(
         for label_val, count in df_clean[output_column].value_counts().items():
             pct = count / len(df_clean) * 100
             logger.info(f"  {label_val}: {count:,} ({pct:.1f}%)")
+
+        post_fn = classifier_config.get("post_process")
+        if post_fn:
+            post_fn(df_clean, output_column)
 
         # Rebuild combined CSV
         combined_csv = _rebuild_combined_csv(metadata.experiment_dir, input_file)

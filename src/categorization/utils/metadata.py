@@ -374,6 +374,7 @@ class ExperimentMetadata:
         file_mapping = {
             "context": f"{context_prefix}_context.parquet",
             "preprocess": f"{context_prefix}_preprocessed.parquet",
+            "preprocessed": f"{context_prefix}_preprocessed.parquet",
             "labeled": f"{context_prefix}_labeled.parquet",
             "batch_requests": "batch_requests.jsonl",
             "batch_results": "batch_results.jsonl",

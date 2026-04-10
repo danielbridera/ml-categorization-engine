@@ -8,7 +8,12 @@ Each classifier is defined by its prompts, output column, and optional model par
 The system handles file naming, SQL queries, and preprocessing automatically.
 """
 
+from collections.abc import Callable
 from typing import Any, TypedDict
+
+import pandas as pd
+
+from categorization.settings.log import logger
 
 
 class ClassifierConfig(TypedDict, total=False):
@@ -28,6 +33,10 @@ class ClassifierConfig(TypedDict, total=False):
         use_generic_query: Use generic SQL query (default: True)
         sql_query_path: Custom SQL query path if use_generic_query is False
         task_description: Optional description for OpenAI metadata
+        post_process: Optional callable for post-labeling logic.
+            Signature: (df_clean: pd.DataFrame, output_column: str) -> None
+            Called after labels are written and errors filtered out.
+            Use for derived metrics, secondary outputs, or custom logging.
     """
 
     # Required
@@ -45,6 +54,30 @@ class ClassifierConfig(TypedDict, total=False):
     task_description: str
     unit: str  # "message" (default) or "conversation"
     conversation_timeout: str  # e.g. "30m" — only used when unit="conversation"
+    post_process: Callable[[pd.DataFrame, str], None]
+
+
+# ============================================================================
+# POST-PROCESSING FUNCTIONS
+# ============================================================================
+# Optional post-labeling functions that can be attached to a classifier via
+# the `post_process` field. Each function receives the labeled DataFrame
+# (errors already filtered) and the output column name.
+
+
+def _compute_icsat_score(df: pd.DataFrame, output_column: str) -> None:
+    """Compute and log the iCSAT score (NPS-style) from PROMOTER/DETRACTOR labels."""
+    total = len(df)
+    if total == 0:
+        return
+    normalized = df[output_column].str.upper()
+    promoters = int((normalized == "PROMOTER").sum())
+    detractors = int((normalized == "DETRACTOR").sum())
+    score = round((promoters - detractors) * 100 / total, 1)
+    logger.info(
+        f"iCSAT score: {score:+.1f}",
+        details=f"promoters={promoters}, detractors={detractors}, total={total}",
+    )
 
 
 # ============================================================================
@@ -267,6 +300,33 @@ User message: {message}""",
         "temperature": 0,
         "max_tokens": 15,
         "use_generic_query": True,
+    },
+    # ------------------------------------------------------------------------
+    # iCSAT — Inferred Customer Satisfaction (NPS-style)
+    # ------------------------------------------------------------------------
+    "ICSAT": {
+        "context_name": "ICSAT",
+        "unit": "conversation",
+        "system_prompt": (
+            "You are a customer satisfaction classifier. "
+            "Classify the conversation as exactly one of: PROMOTER, PASSIVE, DETRACTOR. "
+            "Reply with the label only."
+        ),
+        "user_prompt_template": (
+            "Classify this chatbot conversation:\n\n{message}\n\n"
+            "PROMOTER: user completed a transactional goal OR explicitly expressed satisfaction. "
+            "Simply receiving information without reacting is NOT enough.\n"
+            "PASSIVE: user browsed, asked questions, or received info without clear satisfaction "
+            "or dissatisfaction. Info delivered correctly but user just moved on.\n"
+            "DETRACTOR: explicit bad experience — user complained, bot looped, "
+            "user answered survey negatively, or bot failed with technical error.\n\n"
+            "Label:"
+        ),
+        "output_column": "nps_category",
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "max_tokens": 10,
+        "post_process": _compute_icsat_score,
     },
 }
 

@@ -21,10 +21,11 @@ Generic framework for classifying conversations and messages using LLMs (stream 
 
 **Conversation-level** (classify full user+agent transcripts from the `CONVERSATIONS` context):
 
-| Classifier | Output column | Labels |
-|---|---|---|
-| `CONVERSATION_SENTIMENT` | `sentiment` | positive, negative, neutral, mixed |
-| `CONVERSATION_ESCALATION` | `escalated_to_human` | escalated, not_escalated |
+| Classifier | Output column | Labels | Notes |
+|---|---|---|---|
+| `CONVERSATION_SENTIMENT` | `sentiment` | positive, negative, neutral, mixed | |
+| `CONVERSATION_ESCALATION` | `escalated_to_human` | escalated, not_escalated | |
+| `ICSAT` | `nps_category` | promoter, passive, detractor | Logs iCSAT score `(promoters−detractors)/total×100` |
 
 **Message-level** (classify individual user messages):
 
@@ -249,6 +250,7 @@ The system auto-generates file names, handles retries, logs cost, and merges int
 | `temperature` | `0` | sampling temperature |
 | `max_tokens` | `10` | max response tokens |
 | `task_description` | classifier name | OpenAI batch job metadata |
+| `post_process` | `None` | Optional `(df, output_column) -> None` called after labeling. Use for derived metrics or custom logging (e.g. iCSAT score). |
 
 ---
 
