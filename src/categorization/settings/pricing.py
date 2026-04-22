@@ -13,6 +13,8 @@ PRICING: dict[str, dict[str, float]] = {
     "gpt-4o-mini": {"input": 0.150, "output": 0.600},
     "gpt-4o": {"input": 2.500, "output": 10.000},
     "gpt-4o-2024-11-20": {"input": 2.500, "output": 10.000},
+    "gpt-4.1-mini": {"input": 0.400, "output": 1.600},
+    "gpt-4.1": {"input": 2.000, "output": 8.000},
     "gpt-4-turbo": {"input": 10.000, "output": 30.000},
     "gpt-3.5-turbo": {"input": 0.500, "output": 1.500},
 }
