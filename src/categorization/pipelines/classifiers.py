@@ -8,6 +8,8 @@ Each classifier is defined by its prompts, output column, and optional model par
 The system handles file naming, SQL queries, and preprocessing automatically.
 """
 
+import json
+import re
 from collections.abc import Callable
 from typing import Any, TypedDict
 
@@ -37,6 +39,16 @@ class ClassifierConfig(TypedDict, total=False):
             Signature: (df_clean: pd.DataFrame, output_column: str) -> None
             Called after labels are written and errors filtered out.
             Use for derived metrics, secondary outputs, or custom logging.
+        parse_json_response: When True, treat each raw LLM response as a JSON
+            object of shape ``{"<label_key>": "...", "reason": "..."}`` and
+            split into two columns: ``<output_column>`` (the label) and
+            ``<output_column>_reason`` (free text). Malformed responses fall
+            back to the raw string + None.
+        family: Classifier family tag ("monitoring", "conversations",
+            "message"). Used for classifier/context compatibility checks and
+            downstream writer key mapping.
+        ls_eval_key: Optional LangSmith-whitelisted evaluator key for the
+            monitoring family — consumed by the LangSmith-shaped writer.
     """
 
     # Required
@@ -55,6 +67,9 @@ class ClassifierConfig(TypedDict, total=False):
     unit: str  # "message" (default) or "conversation"
     conversation_timeout: str  # e.g. "30m" — only used when unit="conversation"
     post_process: Callable[[pd.DataFrame, str], None]
+    parse_json_response: bool
+    family: str
+    ls_eval_key: str
 
 
 # ============================================================================
@@ -63,6 +78,39 @@ class ClassifierConfig(TypedDict, total=False):
 # Optional post-labeling functions that can be attached to a classifier via
 # the `post_process` field. Each function receives the labeled DataFrame
 # (errors already filtered) and the output column name.
+
+
+_JSON_CODE_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
+
+
+def parse_json_label_and_reason(raw: str) -> tuple[str, str | None]:
+    """Parse one JSON-shaped LLM response into ``(label, reason)``.
+
+    Expects ``{"<label_field>": "...", "reason|reasoning": "..."}``. The first
+    key that is not ``"reason"``/``"reasoning"`` is treated as the label
+    field, which lets a single helper work across evaluators whose label key
+    names differ (``intent_fulfillment``, ``apology_behavior``, etc.).
+
+    Tolerates surrounding code fences (``\\`\\`\\`json ... \\`\\`\\```). On
+    parse failure returns ``(raw, None)`` so downstream can coerce via a
+    per-key fallback instead of silently dropping the row.
+    """
+    if not isinstance(raw, str) or raw == "error":
+        return raw, None
+    cleaned = _JSON_CODE_FENCE_RE.sub("", raw).strip()
+    try:
+        parsed = json.loads(cleaned)
+    except (json.JSONDecodeError, TypeError):
+        return raw, None
+    if not isinstance(parsed, dict):
+        return raw, None
+    reason = parsed.get("reason") or parsed.get("reasoning")
+    label_key = next(
+        (k for k in parsed.keys() if k not in ("reason", "reasoning")), None
+    )
+    if label_key is None:
+        return raw, reason
+    return str(parsed[label_key]), (str(reason) if reason is not None else None)
 
 
 def _compute_icsat_score(df: pd.DataFrame, output_column: str) -> None:
@@ -329,6 +377,28 @@ User message: {message}""",
         "post_process": _compute_icsat_score,
     },
 }
+
+
+# ============================================================================
+# Auto-discovered specs from src/categorization/prompts/
+# ============================================================================
+# Newer classifiers live one-per-file under prompts/<family>/<name>.py and are
+# registered via the ClassifierSpec dataclass. We merge them into CLASSIFIERS
+# at import time so downstream (make_label, make_process_batches) keeps reading
+# a single unified registry. On name collision, the auto-discovered spec wins —
+# this lets a newer spec override a legacy entry during migration.
+try:
+    from categorization.prompts import discover_classifier_configs as _discover
+
+    for _name, _cfg in _discover().items():
+        CLASSIFIERS[_name] = _cfg  # type: ignore[assignment]
+    del _discover, _name, _cfg
+except ImportError:
+    # prompts package not yet set up — silently continue with the legacy registry
+    pass
+except NameError:
+    # No specs discovered — _name/_cfg never bound; that's fine
+    pass
 
 
 # ============================================================================

@@ -9,7 +9,10 @@ Only needed when make_label was run with --mode batch.
 
 from categorization.clients.openai_batch import OpenAIBatchClient
 from categorization.management.make_label import _rebuild_combined_csv
-from categorization.pipelines.classifiers import get_classifier_config
+from categorization.pipelines.classifiers import (
+    get_classifier_config,
+    parse_json_label_and_reason,
+)
 from categorization.settings.log import logger
 from categorization.utils.classifier_utils import (
     get_classifier_files,
@@ -129,6 +132,13 @@ def make_process_batches(
             step_name="process_batches",
             required_columns=required_cols,
         )
+
+        # Optional: parse JSON-shaped responses into label + reason columns.
+        # No-op for classifiers that emit bare labels.
+        if classifier_config.get("parse_json_response"):
+            parsed = [parse_json_label_and_reason(lbl) for lbl in labels]
+            labels = [p[0] for p in parsed]
+            df[f"{output_column}_reason"] = [p[1] for p in parsed]
 
         df[output_column] = labels
         labeled_count = sum(1 for lbl in labels if lbl != "error")

@@ -15,7 +15,10 @@ from pathlib import Path
 import pandas as pd
 
 from categorization.clients.openai_batch import OpenAIBatchClient
-from categorization.pipelines.classifiers import get_classifier_config
+from categorization.pipelines.classifiers import (
+    get_classifier_config,
+    parse_json_label_and_reason,
+)
 from categorization.settings.log import logger
 from categorization.settings.pricing import estimate_cost
 from categorization.utils.classifier_utils import (
@@ -161,6 +164,13 @@ def make_label(
             max_tokens=classifier_config.get("max_tokens", 10),
             max_workers=max_workers,
         )
+
+        # Optional: parse JSON-shaped responses into label + reason columns.
+        # No-op for classifiers that emit bare labels.
+        if classifier_config.get("parse_json_response"):
+            parsed = [parse_json_label_and_reason(lbl) for lbl in labels]
+            labels = [p[0] for p in parsed]
+            df[f"{output_column}_reason"] = [p[1] for p in parsed]
 
         df[output_column] = labels
         labeled_count = sum(1 for lbl in labels if lbl != "error")
