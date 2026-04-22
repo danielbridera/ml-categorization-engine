@@ -39,6 +39,10 @@ class ExperimentMetadata:
         unit: str = "message",
         conversation_timeout: str = "30m",
         workflow_names: str | None = None,
+        granularity: str = "message",
+        turn_filter_step_name: str | None = None,
+        classifier_family: str | None = None,
+        has_oris_applied: bool | None = None,
         base_dir: str = "experiments",
     ) -> "ExperimentMetadata":
         """
@@ -79,6 +83,10 @@ class ExperimentMetadata:
                 "unit": unit,
                 "conversation_timeout": conversation_timeout,
                 "workflow_names": workflow_names,
+                "granularity": granularity,
+                "turn_filter_step_name": turn_filter_step_name,
+                "classifier_family": classifier_family,
+                "has_oris_applied": has_oris_applied,
             },
             "steps_completed": [],
             "batch_info": None,

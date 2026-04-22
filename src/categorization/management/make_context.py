@@ -13,6 +13,7 @@ from categorization.pipelines.classifiers import (
     EXTRACTION_CONTEXTS,
     get_classifier_config,
 )
+from categorization.pipelines.contexts import CONTEXTS, ExtractionContext
 from categorization.settings.log import logger
 from categorization.utils.classifier_utils import (
     get_classifier_files,
@@ -33,6 +34,7 @@ def make_context(
     workflow_names: str | None = None,
     sql_query_path: str | None = None,
     unit: str = "message",
+    has_oris: bool | None = None,
 ) -> str:
     """
     Extract messages from BigQuery and create new experiment.
@@ -46,6 +48,10 @@ def make_context(
         workflow_names: Comma-separated workflow names to filter (e.g. "bot1,bot2")
         sql_query_path: Override SQL query path (required for fully custom contexts)
         unit: Classification unit — "message" or "conversation"
+        has_oris: Tri-state ORIS filter — None = use context default, True = add
+            ``AND has_oris = TRUE`` filter, False = no filter. Only honored for
+            contexts that query ``mart_conversations`` with a ``{has_oris_filter}``
+            placeholder (currently the MONITORING / CONVERSATIONS_V2 contexts).
 
     Returns:
         Experiment ID
@@ -67,8 +73,24 @@ def make_context(
     if n_samples > 1_000_000:
         logger.warning(f"Large n_samples may cause memory issues: {n_samples:,}")
 
-    # Get unit, timeout, and SQL path — from classifier registry, extraction contexts, or explicit override
-    if context_name in CLASSIFIERS:
+    # Get unit, timeout, and SQL path — from classifier registry, the new
+    # ExtractionContext registry, the legacy EXTRACTION_CONTEXTS dict, or an
+    # explicit override in that priority order.
+    context_obj: ExtractionContext | None = None
+    classifier_family: str | None = None
+    granularity: str = "message"
+    turn_filter_step_name: str | None = None
+
+    if context_name in CONTEXTS:
+        context_obj = CONTEXTS[context_name]
+        sql_query_path = sql_query_path or context_obj.sql_query_path
+        unit = context_obj.unit
+        granularity = context_obj.granularity
+        turn_filter_step_name = context_obj.turn_filter_step_name
+        classifier_family = context_obj.classifier_family
+        classifier_config = None
+        conversation_timeout = "30m"
+    elif context_name in CLASSIFIERS:
         classifier_config = get_classifier_config(context_name)
         unit = classifier_config.get("unit", unit)
         conversation_timeout = classifier_config.get("conversation_timeout", "30m")
@@ -82,14 +104,22 @@ def make_context(
         if sql_query_path is None:
             available_classifiers = ", ".join(sorted(CLASSIFIERS.keys()))
             available_contexts = ", ".join(sorted(EXTRACTION_CONTEXTS.keys()))
+            available_new = ", ".join(sorted(CONTEXTS.keys()))
             raise ValueError(
                 f"Unknown context: '{context_name}'. "
+                f"Available contexts: {available_new}. "
                 f"Available classifiers: {available_classifiers}. "
-                f"Available extraction contexts: {available_contexts}. "
+                f"Available legacy contexts: {available_contexts}. "
                 f"Or provide --sql_query_path for a fully custom context."
             )
         classifier_config = None
         conversation_timeout = "30m"
+
+    # Resolve effective has_oris: CLI override > context default > None
+    if has_oris is None and context_obj is not None:
+        effective_has_oris = context_obj.has_oris_default
+    else:
+        effective_has_oris = has_oris  # may still be None for legacy contexts
 
     # Create new experiment
     metadata = ExperimentMetadata.create_new(
@@ -101,6 +131,10 @@ def make_context(
         unit=unit,
         conversation_timeout=conversation_timeout,
         workflow_names=workflow_names,
+        granularity=granularity,
+        turn_filter_step_name=turn_filter_step_name,
+        classifier_family=classifier_family,
+        has_oris_applied=effective_has_oris,
     )
 
     experiment_id = metadata.experiment_id
@@ -146,6 +180,11 @@ def make_context(
         workflow_filter = ""
         workflow_names_list = ""
 
+    # has_oris_filter injected only for queries that support mart_conversations
+    # columns. When None (legacy path without the placeholder) → empty string,
+    # which is harmless for queries that do reference {has_oris_filter}.
+    has_oris_filter = "AND t.has_oris = TRUE" if effective_has_oris is True else ""
+
     format_kwargs: dict = {
         "start_date": start_date,
         "end_date": end_date,
@@ -154,6 +193,7 @@ def make_context(
         "workflow_filter": workflow_filter,
         "workflow_name_filter": workflow_filter,
         "workflow_names_list": workflow_names_list,
+        "has_oris_filter": has_oris_filter,
     }
     if unit == "conversation":
         # Convert timeout string (e.g. "30m") to minutes for BigQuery TIMESTAMP_DIFF
