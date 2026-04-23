@@ -86,6 +86,15 @@ def main():
     type=click.Choice(["message", "conversation"], case_sensitive=False),
     help="Classification unit: 'message' (default) or 'conversation'.",
 )
+@click.option(
+    "--has-oris/--no-has-oris",
+    "has_oris",
+    default=None,
+    help="Override the context's has_oris filter. Default (None) uses the "
+    "context's has_oris_default (MONITORING defaults to True, "
+    "CONVERSATIONS_V2 to False). Only applies to contexts whose SQL "
+    "references {has_oris_filter} (mart_conversations.sql).",
+)
 @handle_cli_errors
 def make_context_cmd(
     start_date: str,
@@ -96,6 +105,7 @@ def make_context_cmd(
     workflow_names: str | None,
     sql_query_path: str | None,
     unit: str,
+    has_oris: bool | None,
 ):
     """STEP 1: Extract messages from BigQuery"""
     click.echo("🔄 Extracting messages from BigQuery...")
@@ -114,6 +124,7 @@ def make_context_cmd(
         workflow_names=workflow_names,
         sql_query_path=sql_query_path,
         unit=unit,
+        has_oris=has_oris,
     )
 
     click.secho("\n✅ Context creation completed!", fg="green")
