@@ -15,8 +15,6 @@ from typing import Any, TypedDict
 
 import pandas as pd
 
-from categorization.settings.log import logger
-
 
 class ClassifierConfig(TypedDict, total=False):
     """
@@ -111,21 +109,6 @@ def parse_json_label_and_reason(raw: str) -> tuple[str, str | None]:
     if label_key is None:
         return raw, reason
     return str(parsed[label_key]), (str(reason) if reason is not None else None)
-
-
-def _compute_icsat_score(df: pd.DataFrame, output_column: str) -> None:
-    """Compute and log the iCSAT score (NPS-style) from PROMOTER/DETRACTOR labels."""
-    total = len(df)
-    if total == 0:
-        return
-    normalized = df[output_column].str.upper()
-    promoters = int((normalized == "PROMOTER").sum())
-    detractors = int((normalized == "DETRACTOR").sum())
-    score = round((promoters - detractors) * 100 / total, 1)
-    logger.info(
-        f"iCSAT score: {score:+.1f}",
-        details=f"promoters={promoters}, detractors={detractors}, total={total}",
-    )
 
 
 # ============================================================================
@@ -267,67 +250,6 @@ Conversation:
         "use_generic_query": True,
     },
     # ------------------------------------------------------------------------
-    # Conversation Escalation — was the conversation escalated to a human?
-    # Designed to stack on the same preprocessed CONVERSATIONS dataset.
-    # ------------------------------------------------------------------------
-    "CONVERSATION_ESCALATION": {
-        "context_name": "CONVERSATION_ESCALATION",
-        "system_prompt": (
-            "You are a customer support analyst. "
-            "Classify whether a chatbot conversation was escalated to a human agent."
-        ),
-        "user_prompt_template": """The following is a conversation between a user and an automated chatbot. Messages are labeled by speaker:
-- "user:" lines are messages sent by the customer
-- "flow:" lines are automated responses from the chatbot
-
-Classify whether the user wanted or attempted to reach a live human agent. Focus on USER INTENT, not whether the bot successfully completed the transfer.
-
-- escalated: The user explicitly requested to speak to a human agent at any point in the conversation. This includes direct requests (e.g. "asesor", "agente", "persona", "humano", "quiero hablar con alguien"), misspellings (e.g. "acesor", "assesor"), or the bot confirming a live transfer mid-chat (e.g. "te estoy transfiriendo con un agente")
-- not_escalated: The user never requested a human and the conversation was handled entirely by the bot. IMPORTANT: if the bot assigns a queue turn number for a future in-person branch visit (e.g. "ya estás en la fila", "un asesor dirá tu nombre", "pronto un asesor dirá tu nombre"), this is NOT an escalation — the user is scheduling a visit, not requesting a human in this chat
-
-Respond with ONLY the category name (escalated or not_escalated), nothing else.
-
-Conversation:
-{message}""",
-        "output_column": "escalated_to_human",
-        "model": "gpt-4o-mini",
-        "temperature": 0,
-        "max_tokens": 10,
-        "unit": "conversation",
-        "conversation_timeout": "30m",
-    },
-    # ------------------------------------------------------------------------
-    # Conversation Sentiment — user sentiment across the full conversation
-    # Designed to stack on the same preprocessed CONVERSATIONS dataset.
-    # ------------------------------------------------------------------------
-    "CONVERSATION_SENTIMENT": {
-        "context_name": "CONVERSATION_SENTIMENT",
-        "system_prompt": (
-            "You are a sentiment analysis expert. "
-            "Respond only with the sentiment category."
-        ),
-        "user_prompt_template": """The following is a conversation between a user and an automated chatbot. Messages are labeled by speaker:
-- "user:" lines are messages sent by the customer
-- "flow:" lines are automated responses from the chatbot
-
-Analyze the overall sentiment expressed by the user throughout the conversation and classify it as one of these categories:
-- positive: Expresses satisfaction, gratitude, happiness, or approval
-- negative: Expresses frustration, anger, disappointment, or complaint
-- neutral: Factual, informational, or no clear emotional tone
-- mixed: Contains both positive and negative sentiments
-
-Respond with ONLY the category name (positive, negative, neutral, or mixed), nothing else.
-
-Conversation:
-{message}""",
-        "output_column": "sentiment",
-        "model": "gpt-4o-mini",
-        "temperature": 0,
-        "max_tokens": 10,
-        "unit": "conversation",
-        "conversation_timeout": "30m",
-    },
-    # ------------------------------------------------------------------------
     # Feedback Type Classification
     # ------------------------------------------------------------------------
     "FEEDBACK": {
@@ -348,33 +270,6 @@ User message: {message}""",
         "temperature": 0,
         "max_tokens": 15,
         "use_generic_query": True,
-    },
-    # ------------------------------------------------------------------------
-    # iCSAT — Inferred Customer Satisfaction (NPS-style)
-    # ------------------------------------------------------------------------
-    "ICSAT": {
-        "context_name": "ICSAT",
-        "unit": "conversation",
-        "system_prompt": (
-            "You are a customer satisfaction classifier. "
-            "Classify the conversation as exactly one of: PROMOTER, PASSIVE, DETRACTOR. "
-            "Reply with the label only."
-        ),
-        "user_prompt_template": (
-            "Classify this chatbot conversation:\n\n{message}\n\n"
-            "PROMOTER: user completed a transactional goal OR explicitly expressed satisfaction. "
-            "Simply receiving information without reacting is NOT enough.\n"
-            "PASSIVE: user browsed, asked questions, or received info without clear satisfaction "
-            "or dissatisfaction. Info delivered correctly but user just moved on.\n"
-            "DETRACTOR: explicit bad experience — user complained, bot looped, "
-            "user answered survey negatively, or bot failed with technical error.\n\n"
-            "Label:"
-        ),
-        "output_column": "nps_category",
-        "model": "gpt-4o-mini",
-        "temperature": 0,
-        "max_tokens": 10,
-        "post_process": _compute_icsat_score,
     },
 }
 

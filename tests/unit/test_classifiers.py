@@ -16,11 +16,13 @@ import pytest
 from categorization.pipelines.classifiers import (
     CLASSIFIERS,
     EXTRACTION_CONTEXTS,
-    _compute_icsat_score,
     get_classifier_config,
     get_classifier_info,
     list_classifiers,
 )
+# iCSAT score helper moved to prompts/conversations/icsat.py as part of the
+# classifier-spec refactor; the test still exercises the same logic.
+from categorization.prompts.conversations.icsat import compute_icsat_score as _compute_icsat_score
 
 
 # ---------------------------------------------------------------------------

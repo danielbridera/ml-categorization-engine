@@ -110,6 +110,26 @@ def make_label(
     classifier_files = get_classifier_files(effective_classifier)
     step_names = get_classifier_step_names(effective_classifier)
 
+    # Family-compatibility check (opt-in): if the classifier declares a
+    # ``family`` (set via ClassifierSpec) and the experiment's context does
+    # too (via ExtractionContext.classifier_family), fail loud on mismatch
+    # rather than silently running ORIS evals on non-ORIS-filtered data.
+    # Legacy classifiers without a family attribute skip this check entirely.
+    classifier_family = classifier_config.get("family")
+    experiment_family = metadata.get_parameters().get("classifier_family")
+    if (
+        classifier_family is not None
+        and experiment_family is not None
+        and classifier_family != experiment_family
+    ):
+        raise ValueError(
+            f"{effective_classifier!r} is a '{classifier_family}' classifier — "
+            f"run it under a context whose classifier_family is "
+            f"'{classifier_family}', not '{experiment_family}'. "
+            f"Experiment {experiment_id!r} was created with context "
+            f"{context_name!r} (family={experiment_family!r})."
+        )
+
     text_col = "conversation_text" if unit == "conversation" else "message_text"
     required_cols = (
         [text_col] if unit == "conversation" else ["message_id", "message_text"]
