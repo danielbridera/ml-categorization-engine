@@ -13,6 +13,19 @@ from typing import Any, cast
 from categorization.settings.log import logger
 
 
+def _experiment_timestamp(p: Path) -> str:
+    """Return the trailing ``YYYYMMDD_HHMMSS`` from an experiment_id, or ``""``.
+
+    Experiment IDs are ``"{context_name}_{YYYYMMDD}_{HHMMSS}"`` (see
+    ``ExperimentMetadata.create_new``); sorting on this key picks the most
+    recent run regardless of how the context-name prefix sorts alphabetically.
+    Without this, ``conversations_user_v1_*`` is shadowed by later-in-alphabet
+    contexts like ``workflow_sentiment_*``.
+    """
+    parts = p.name.rsplit("_", 2)
+    return f"{parts[-2]}_{parts[-1]}" if len(parts) >= 3 else ""
+
+
 class ExperimentMetadata:
     """Manages experiment metadata and state tracking"""
 
@@ -172,7 +185,10 @@ class ExperimentMetadata:
             return None
 
         pattern = f"{context_name.lower()}_*" if context_name else "*_*"
-        candidates = sorted(base_path.glob(pattern))
+        candidates = sorted(
+            (p for p in base_path.glob(pattern) if (p / "metadata.json").exists()),
+            key=_experiment_timestamp,
+        )
 
         if not workflow_names:
             return candidates[-1] if candidates else None
