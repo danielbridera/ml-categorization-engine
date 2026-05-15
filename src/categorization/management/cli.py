@@ -12,6 +12,7 @@ import click
 
 from categorization.__version__ import __version__
 from categorization.management.make_context import make_context
+from categorization.management.make_intent_recluster import make_intent_recluster
 from categorization.management.make_label import make_label
 from categorization.management.make_preprocess import make_preprocess
 from categorization.management.make_process_batches import make_process_batches
@@ -271,6 +272,63 @@ def make_process_batches_cmd(context_name: str, workflow_names: str | None):
         )
     else:
         click.secho(f"\n⚠️  Batch status: {status}", fg="yellow")
+
+
+@main.command(name="make_intent_recluster")
+@click.option(
+    "--experiment_id",
+    default=None,
+    help="Experiment ID (auto-detects latest if not specified).",
+)
+@click.option(
+    "--context_name",
+    default=None,
+    help="Context name for auto-detection when --experiment_id is omitted.",
+)
+@click.option(
+    "--workflow_names",
+    default=None,
+    help="Comma-separated workflow names to pinpoint the right experiment.",
+)
+@click.option(
+    "--top_n_for_discovery",
+    type=int,
+    default=150,
+    show_default=True,
+    help="How many top freeform labels to feed Pass A (vocabulary discovery).",
+)
+@click.option(
+    "--model",
+    default="gpt-4.1-mini",
+    show_default=True,
+    help="OpenAI model used for both Pass A and Pass B.",
+)
+@handle_cli_errors
+def make_intent_recluster_cmd(
+    experiment_id: str | None,
+    context_name: str | None,
+    workflow_names: str | None,
+    top_n_for_discovery: int,
+    model: str,
+):
+    """Discover a closed action vocabulary and re-cluster freeform intents per workflow.
+
+    Pass A proposes an action vocabulary from the top-N freeform labels.
+    Pass B maps every raw label to the discovered vocab (chunked at 500).
+
+    Writes canonical_vocabulary_<workflow>.json, taxonomy_mapping_action.json,
+    intent_frequencies_action.csv, and labeled_with_final_action.parquet.
+    """
+    paths = make_intent_recluster(
+        experiment_id=experiment_id,
+        context_name=context_name,
+        workflow_names=workflow_names,
+        top_n_for_discovery=top_n_for_discovery,
+        model=model,
+    )
+    click.secho("\n✅ Intent re-cluster complete", fg="green")
+    for name, path in paths.items():
+        click.echo(f"📄 {name}: {path}")
 
 
 @main.command(name="status")
