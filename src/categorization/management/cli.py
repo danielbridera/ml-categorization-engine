@@ -13,6 +13,9 @@ import click
 from categorization.__version__ import __version__
 from categorization.management.make_context import make_context
 from categorization.management.make_intent_recluster import make_intent_recluster
+from categorization.management.make_intent_taxonomy_json import (
+    make_intent_taxonomy_json,
+)
 from categorization.management.make_label import make_label
 from categorization.management.make_preprocess import make_preprocess
 from categorization.management.make_process_batches import make_process_batches
@@ -359,6 +362,50 @@ def make_intent_recluster_cmd(
     click.secho("\n✅ Intent re-cluster complete", fg="green")
     for name, path in paths.items():
         click.echo(f"📄 {name}: {path}")
+
+
+@main.command(name="make_intent_taxonomy_json")
+@click.option(
+    "--experiment_id",
+    default=None,
+    help="Experiment ID (auto-detects latest if not specified).",
+)
+@click.option(
+    "--context_name",
+    default=None,
+    help="Context name for auto-detection when --experiment_id is omitted.",
+)
+@click.option(
+    "--workflow_names",
+    default=None,
+    help="Comma-separated workflow names to pinpoint the right experiment.",
+)
+@click.option(
+    "--model",
+    default="gpt-4.1-mini",
+    show_default=True,
+    help="Model name to record in the JSON's classifier.method blurb.",
+)
+@handle_cli_errors
+def make_intent_taxonomy_json_cmd(
+    experiment_id: str | None,
+    context_name: str | None,
+    workflow_names: str | None,
+    model: str,
+):
+    """Emit intent_taxonomy_<account_slug>.json per workflow (cheap, no LLM calls)."""
+    written = make_intent_taxonomy_json(
+        experiment_id=experiment_id,
+        context_name=context_name,
+        workflow_names=workflow_names,
+        model=model,
+    )
+    if not written:
+        click.secho("\n⚠️  No taxonomy JSONs written", fg="yellow")
+        return
+    click.secho(f"\n✅ Wrote {len(written)} intent-taxonomy JSON(s)", fg="green")
+    for path in written:
+        click.echo(f"📄 {path}")
 
 
 @main.command(name="status")

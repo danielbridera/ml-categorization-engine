@@ -18,6 +18,7 @@ used by USER_INTENT_EXTRACTION / EVAL_INTENT_AND_FULFILLMENT).
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -528,3 +529,101 @@ def write_recluster_artifacts(
     paths["labeled_with_final_action"] = parquet_path
 
     return paths
+
+
+def _classifier_method_blurb(n_raw_labels: int, chunk_size: int = CHUNK_SIZE) -> str:
+    """Method blurb embedded in the per-account JSON's `classifier.method` field."""
+    if n_raw_labels <= chunk_size:
+        return (
+            "1) freeform LLM intent extraction on first-5-user-messages context; "
+            "2) LLM auto-discovery of a closed action vocabulary; "
+            "3) single-pass LLM mapping to the discovered vocabulary; "
+            "4) frequency aggregation."
+        )
+    n_chunks = (n_raw_labels + chunk_size - 1) // chunk_size
+    return (
+        "1) freeform LLM intent extraction on first-5-user-messages context; "
+        "2) LLM auto-discovery of a closed action vocabulary; "
+        f"3) chunked LLM mapping to the discovered vocabulary ({n_chunks} chunks of "
+        f"up to {chunk_size} labels each); "
+        "4) frequency aggregation."
+    )
+
+
+def build_taxonomy_json(
+    experiment_dir: Path,
+    workflow_name: str,
+    vocab: dict[str, Any],
+    df: pd.DataFrame,
+    model: str = DEFAULT_MODEL,
+) -> Path:
+    """Build and write `intent_taxonomy_<account_slug>.json` for one workflow.
+
+    Reads `metadata.json` for experiment_id, created_at, date_range.
+    Uses `primary_intent_canonical` counts so every prescribed label appears
+    even when it falls below the coverage cutoff.
+    """
+    metadata = json.loads((experiment_dir / "metadata.json").read_text())
+
+    wf_df = df[df["workflow_name"] == workflow_name]
+    total = len(wf_df)
+    counts = wf_df["primary_intent_canonical"].value_counts()
+
+    prescribed: list[tuple[str, str, str]] = [
+        (a["name"], "action", a["description"]) for a in vocab["actions"]
+    ]
+    prescribed += [
+        (label, "meta", META_DESCRIPTIONS[label]) for label in META_LABELS
+    ]
+    prescribed_names = {name for name, _, _ in prescribed}
+
+    rows = [
+        (name, kind, desc, int(counts.get(name, 0)))
+        for name, kind, desc in prescribed
+    ]
+    rows.sort(key=lambda r: r[3], reverse=True)
+
+    unmapped_count = int(counts[~counts.index.isin(prescribed_names)].sum())
+
+    intents: list[dict[str, Any]] = []
+    cumulative = 0
+    for name, kind, desc, cnt in rows:
+        cumulative += cnt
+        intents.append(
+            {
+                "intent": name,
+                "type": kind,
+                "description": desc,
+                "count": cnt,
+                "percentage": round(cnt / total * 100, 1) if total and cnt else 0.0,
+                "cumulative_count": cumulative,
+                "cumulative_percentage": (
+                    round(cumulative / total * 100, 1) if total else 0.0
+                ),
+            }
+        )
+
+    params = metadata.get("parameters", {})
+    output: dict[str, Any] = {
+        "agent": params.get("workflow_names") or workflow_name,
+        "experiment_id": metadata["experiment_id"],
+        "created_at": metadata["created_at"],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "date_range": {
+            "start": params.get("start_date"),
+            "end": params.get("end_date"),
+        },
+        "conversations_used": total,
+        "classifier": {
+            "freeform_intent_extractor": "USER_INTENT_FREEFORM",
+            "action_only_taxonomy_collapse_model": model,
+            "method": _classifier_method_blurb(int(counts.size)),
+        },
+        "user_intents": intents,
+        "unmapped_long_tail_count": unmapped_count,
+    }
+
+    slug = vocab["account_slug"]
+    out_path = experiment_dir / f"intent_taxonomy_{slug}.json"
+    out_path.write_text(json.dumps(output, ensure_ascii=False, indent=2))
+    return out_path
