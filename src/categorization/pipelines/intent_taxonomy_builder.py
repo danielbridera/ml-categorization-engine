@@ -60,6 +60,8 @@ COVERAGE_THRESHOLD = 0.80
 CHUNK_SIZE = 500
 DEFAULT_MODEL = "gpt-4.1-mini"
 TOP_N_FOR_DISCOVERY = 150
+CRITIQUE_WINDOW_SIZE = 350  # labels after the top-N shown to the critique shot
+CRITIQUE_RANDOM_SAMPLE = 100  # additional random labels drawn from beyond the window
 GENERAL_BUCKET = "user_intent_general"
 
 
@@ -115,6 +117,48 @@ Also propose:
 No prose, no code fences."""
 
 
+_CRITIQUE_SYSTEM_PROMPT = """You are refining a canonical action vocabulary for a customer-service chatbot.
+
+You receive:
+1. An INITIAL proposed vocabulary (account_slug + actions) — produced from the top freeform labels of this account.
+2. A BROADER SAMPLE of freeform user-intent labels (Spanish) with counts. These are labels that were NOT visible when the initial vocabulary was proposed: medium-frequency labels just outside the top-N plus a random sample drawn from the long tail. The same business intent may appear under many low-count phrasings — what matters is the CLUSTER, not any single string.
+
+Your job: REVIEW the initial vocabulary against this broader sample and identify intent CLUSTERS in the sample that don't map cleanly to any existing canonical action. For each such cluster, ADD a new canonical action.
+
+# THE FUNDAMENTAL RULE (unchanged)
+
+Each canonical action exists to ROUTE the user to a downstream business handler. Two raw labels are the SAME canonical action if and only if they would be routed to the SAME downstream handler. **The product, category, model, brand, or attribute the user names is almost never what differentiates actions.** Strip the object out of the canonical name unless different objects would trigger different downstream flows on the same verb.
+
+# WHAT COUNTS AS A "MISSING ACTION"
+
+Look for verbs / business operations in the sample that the initial vocabulary cannot absorb cleanly:
+- A SET of labels about asking for technical features, specs, dimensions, compatibility, what-is-included — if the initial vocab has no `consultar_especificaciones`-style action, that's a gap.
+- A SET of labels about explicitly completing a purchase or saying "voy a comprar", "lo llevo" — if there's no `comprar_producto`-style action, that's a gap.
+- A SET of labels about a distinct post-sale operation (warranty, returns, defective product) not covered by the initial actions.
+- Any other coherent intent cluster representing more than a handful of conversations.
+
+A single one-off raw label is NOT a missing action — only ADD when you see a cluster of semantically-similar labels with material aggregate frequency.
+
+# CONSTRAINTS
+
+- PRESERVE the initial vocabulary: do NOT rename, remove, or rewrite existing actions or descriptions. Only APPEND new actions to the list.
+- The target is still 8–15 total actions. The initial vocab is usually 8–12; with critique additions you should typically land at 10–15. Going above 15 means you're slicing by product or being too granular — collapse instead.
+- Apply the route-equivalence rule strictly to any addition. Pure-verb names; no product/category suffixes unless they identify a genuinely different operational flow.
+- The 4 meta-labels (chit_chat_only, unclear_intent, spam, inappropriate) are appended automatically — do NOT propose them.
+- If the initial vocabulary already covers everything in the sample, return it UNCHANGED (same account_slug, same actions list).
+
+# OUTPUT FORMAT — respond with a JSON object only:
+{
+  "account_slug": "<same as initial>",
+  "actions": [
+    <all initial actions, verbatim>,
+    <any new actions to add>
+  ],
+  "added_count": <integer — how many new actions were appended>
+}
+No prose, no code fences."""
+
+
 def _build_mapping_system_prompt(workflow_name: str, vocab: dict[str, Any]) -> str:
     """Compose the Pass B system prompt from the discovered vocab + global meta-labels."""
     action_lines = "\n".join(
@@ -143,23 +187,14 @@ def _build_mapping_system_prompt(workflow_name: str, vocab: dict[str, Any]) -> s
 Respond ONLY with a JSON object: {{"<raw_label>": "<canonical_label>", ...}}. No prose, no code fences."""
 
 
-def discover_vocabulary(
+def _propose_initial_vocabulary(
     client: OpenAI,
     workflow_name: str,
     freeform_counts: pd.Series,
-    top_n: int = TOP_N_FOR_DISCOVERY,
-    model: str = DEFAULT_MODEL,
+    top_n: int,
+    model: str,
 ) -> dict[str, Any]:
-    """Pass A — propose a closed canonical action vocabulary from the top-N freeform labels.
-
-    Returns:
-        {
-          "account_slug": "...",
-          "workflow_name": "...",
-          "actions": [{"name": "...", "description": "..."}, ...],
-          "meta_labels": [...],
-        }
-    """
+    """Shot 1 — propose an initial vocabulary from the top-N most frequent freeform labels."""
     top = freeform_counts.head(top_n)
     label_lines = "\n".join(f"{label}\t{count}" for label, count in top.items())
     user_msg = (
@@ -193,15 +228,158 @@ def discover_vocabulary(
     ]
     actions = [a for a in actions if a["name"] not in META_LABELS]
 
-    logger.info(
-        f"[{workflow_name}] discovered {len(actions)} actions "
-        f"(slug: {raw['account_slug']})"
-    )
-
     return {
         "account_slug": raw["account_slug"],
-        "workflow_name": workflow_name,
         "actions": actions,
+    }
+
+
+def _critique_vocabulary(
+    client: OpenAI,
+    workflow_name: str,
+    initial_vocab: dict[str, Any],
+    freeform_counts: pd.Series,
+    top_n: int,
+    critique_window: int,
+    critique_random_sample: int,
+    model: str,
+    rng_seed: int = 42,
+) -> tuple[dict[str, Any], int]:
+    """Shot 2 — show the LLM the initial vocab plus a broader sample of unseen labels and ask for additions.
+
+    Returns (refined_vocab, added_count). If no additional labels exist beyond
+    top_n, the initial vocab is returned unchanged.
+    """
+    after_top = freeform_counts.iloc[top_n:]
+    if after_top.empty:
+        return initial_vocab, 0
+
+    window = after_top.head(critique_window)
+    remaining = after_top.iloc[critique_window:]
+    if critique_random_sample > 0 and len(remaining) > 0:
+        sample_size = min(critique_random_sample, len(remaining))
+        random_sample = remaining.sample(
+            n=sample_size, random_state=rng_seed
+        ).sort_values(ascending=False)
+    else:
+        random_sample = remaining.iloc[:0]
+
+    initial_payload = json.dumps(
+        {
+            "account_slug": initial_vocab["account_slug"],
+            "actions": initial_vocab["actions"],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    window_lines = "\n".join(f"{label}\t{count}" for label, count in window.items())
+    sample_lines = "\n".join(
+        f"{label}\t{count}" for label, count in random_sample.items()
+    )
+
+    user_msg = (
+        f"Account workflow: {workflow_name}\n\n"
+        f"# INITIAL VOCABULARY\n{initial_payload}\n\n"
+        f"# BROADER SAMPLE — labels NOT seen during initial proposal\n\n"
+        f"## Medium-frequency labels (next {len(window)} after the top-{top_n}):\n"
+        f"{window_lines}\n\n"
+        f"## Random sample from the long tail ({len(random_sample)} labels):\n"
+        f"{sample_lines}\n\n"
+        f"Review and return the (possibly expanded) vocabulary as JSON."
+    )
+
+    def _call() -> Any:
+        return client.chat.completions.create(
+            model=model,
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _CRITIQUE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+        )
+
+    resp = retry_with_backoff(_call)
+    raw = json.loads(resp.choices[0].message.content)
+
+    if "actions" not in raw:
+        raise ValueError(
+            f"Critique response missing `actions` key (got: {list(raw)})"
+        )
+
+    refined_actions: list[dict[str, str]] = [
+        {"name": a["name"], "description": a["description"]} for a in raw["actions"]
+    ]
+    refined_actions = [a for a in refined_actions if a["name"] not in META_LABELS]
+
+    initial_names = {a["name"] for a in initial_vocab["actions"]}
+    refined_names = {a["name"] for a in refined_actions}
+    # Defensive: if the LLM dropped any initial action, reinstate it (constraint says preserve).
+    if not initial_names.issubset(refined_names):
+        missing = [
+            a for a in initial_vocab["actions"] if a["name"] not in refined_names
+        ]
+        refined_actions = refined_actions + missing
+        refined_names = refined_names | {a["name"] for a in missing}
+
+    added_count = len(refined_names - initial_names)
+    refined_vocab = {
+        "account_slug": raw.get("account_slug") or initial_vocab["account_slug"],
+        "actions": refined_actions,
+    }
+    return refined_vocab, added_count
+
+
+def discover_vocabulary(
+    client: OpenAI,
+    workflow_name: str,
+    freeform_counts: pd.Series,
+    top_n: int = TOP_N_FOR_DISCOVERY,
+    model: str = DEFAULT_MODEL,
+    critique: bool = True,
+    critique_window: int = CRITIQUE_WINDOW_SIZE,
+    critique_random_sample: int = CRITIQUE_RANDOM_SAMPLE,
+) -> dict[str, Any]:
+    """Pass A — propose a closed canonical action vocabulary from the freeform labels.
+
+    Runs in two shots by default:
+      Shot 1 — propose initial vocab from the top-N most frequent labels.
+      Shot 2 — show the proposal + a broader sample (next `critique_window`
+               labels plus a random sample of `critique_random_sample` from
+               the rest of the tail) and ask for additions to cover clusters
+               the initial pass missed.
+
+    Set `critique=False` to skip Shot 2 (faster, cheaper, lower recall).
+    """
+    initial_vocab = _propose_initial_vocabulary(
+        client, workflow_name, freeform_counts, top_n, model
+    )
+    logger.info(
+        f"[{workflow_name}] shot 1 proposed {len(initial_vocab['actions'])} actions "
+        f"(slug: {initial_vocab['account_slug']})"
+    )
+
+    final_vocab = initial_vocab
+    if critique:
+        final_vocab, added = _critique_vocabulary(
+            client,
+            workflow_name,
+            initial_vocab,
+            freeform_counts,
+            top_n=top_n,
+            critique_window=critique_window,
+            critique_random_sample=critique_random_sample,
+            model=model,
+        )
+        logger.info(
+            f"[{workflow_name}] shot 2 added {added} action(s) "
+            f"(total: {len(final_vocab['actions'])})"
+        )
+
+    return {
+        "account_slug": final_vocab["account_slug"],
+        "workflow_name": workflow_name,
+        "actions": final_vocab["actions"],
         "meta_labels": list(META_LABELS),
     }
 

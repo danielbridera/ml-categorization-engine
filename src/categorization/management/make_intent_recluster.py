@@ -17,6 +17,8 @@ import pandas as pd
 from openai import OpenAI
 
 from categorization.pipelines.intent_taxonomy_builder import (
+    CRITIQUE_RANDOM_SAMPLE,
+    CRITIQUE_WINDOW_SIZE,
     DEFAULT_MODEL,
     TOP_N_FOR_DISCOVERY,
     apply_coverage_cutoff,
@@ -37,6 +39,9 @@ def make_intent_recluster(
     context_name: str | None = None,
     workflow_names: str | None = None,
     top_n_for_discovery: int = TOP_N_FOR_DISCOVERY,
+    critique: bool = True,
+    critique_window: int = CRITIQUE_WINDOW_SIZE,
+    critique_random_sample: int = CRITIQUE_RANDOM_SAMPLE,
     model: str = DEFAULT_MODEL,
 ) -> dict[str, Path]:
     """Run vocabulary discovery + label mapping for every workflow in the experiment."""
@@ -78,9 +83,12 @@ def make_intent_recluster(
             freeform_counts=counts,
             top_n=top_n_for_discovery,
             model=model,
+            critique=critique,
+            critique_window=critique_window,
+            critique_random_sample=critique_random_sample,
         )
         logger.info(
-            f"[{workflow}] discovered {len(vocab['actions'])} actions "
+            f"[{workflow}] final vocab: {len(vocab['actions'])} action labels "
             f"(slug: {vocab['account_slug']}) — running Pass B (label mapping)…"
         )
         mapping = map_freeform_to_canonical(

@@ -295,7 +295,28 @@ def make_process_batches_cmd(context_name: str, workflow_names: str | None):
     type=int,
     default=150,
     show_default=True,
-    help="How many top freeform labels to feed Pass A (vocabulary discovery).",
+    help="How many top freeform labels to feed Pass A shot 1 (initial proposal).",
+)
+@click.option(
+    "--no_critique",
+    "no_critique",
+    is_flag=True,
+    default=False,
+    help="Skip Pass A shot 2 (critique/expand). Faster + cheaper, lower recall.",
+)
+@click.option(
+    "--critique_window",
+    type=int,
+    default=350,
+    show_default=True,
+    help="Labels just past --top_n_for_discovery shown to the critique shot.",
+)
+@click.option(
+    "--critique_random_sample",
+    type=int,
+    default=100,
+    show_default=True,
+    help="Additional random labels drawn from the long tail for critique.",
 )
 @click.option(
     "--model",
@@ -309,11 +330,17 @@ def make_intent_recluster_cmd(
     context_name: str | None,
     workflow_names: str | None,
     top_n_for_discovery: int,
+    no_critique: bool,
+    critique_window: int,
+    critique_random_sample: int,
     model: str,
 ):
     """Discover a closed action vocabulary and re-cluster freeform intents per workflow.
 
-    Pass A proposes an action vocabulary from the top-N freeform labels.
+    Pass A (vocabulary discovery) runs in two shots by default:
+      Shot 1 — propose initial vocab from the top-N most frequent labels.
+      Shot 2 — show the proposal plus a broader sample of unseen labels and
+               ask for additions to cover clusters the initial pass missed.
     Pass B maps every raw label to the discovered vocab (chunked at 500).
 
     Writes canonical_vocabulary_<workflow>.json, taxonomy_mapping_action.json,
@@ -324,6 +351,9 @@ def make_intent_recluster_cmd(
         context_name=context_name,
         workflow_names=workflow_names,
         top_n_for_discovery=top_n_for_discovery,
+        critique=not no_critique,
+        critique_window=critique_window,
+        critique_random_sample=critique_random_sample,
         model=model,
     )
     click.secho("\n✅ Intent re-cluster complete", fg="green")
